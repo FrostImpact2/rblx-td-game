@@ -497,7 +497,7 @@ end
 -- UPDATE LOOP
 -- ============================================================
 
-RunService.RenderStepped:Connect(function()
+RunService.RenderStepped:Connect(function(dt)
 	-- HP bars
 	for model, gui in pairs(towerHpGuis) do
 		if model and model.Parent then
@@ -512,9 +512,17 @@ RunService.RenderStepped:Connect(function()
 			local bg = outline:FindFirstChild("HPBarBg")
 			if bg then
 				local f = bg:FindFirstChild("HPBarFill")
-				if f then f.Size = UDim2.new(ratio,0,1,0) end
+				if f then
+					-- Smoothly lerp the fill bar toward the actual ratio
+					local currentRatio = f.Size.X.Scale
+					local smoothed = currentRatio + (ratio - currentRatio) * math.min(dt * 10, 1)
+					f.Size = UDim2.new(smoothed, 0, 1, 0)
+				end
 				local t = bg:FindFirstChild("HPText")
-				if t then t.Text = math.floor(hp).."/"..maxHp end
+				if t then
+					local newText = math.floor(hp).."/"..maxHp
+					if t.Text ~= newText then t.Text = newText end
+				end
 			end
 		else
 			if gui and gui.Parent then gui:Destroy() end
@@ -546,7 +554,8 @@ RunService.RenderStepped:Connect(function()
 				if v then
 					local hp = selectedTowerModel:GetAttribute("HP") or 0
 					local mhp = selectedTowerModel:GetAttribute("MaxHP") or 0
-					v.Text = math.floor(hp).."/"..mhp.." HP"
+					local newText = math.floor(hp).."/"..mhp.." HP"
+					if v.Text ~= newText then v.Text = newText end
 				end
 			end
 

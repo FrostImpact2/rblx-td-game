@@ -488,7 +488,8 @@ local function createConeIndicator(position: Vector3, direction: Vector3, coneRa
 	anchor.Parent = Workspace
 
 	task.spawn(function()
-		task.wait(0.1)
+		local holdElapsed = 0
+		while holdElapsed < 0.1 do holdElapsed = holdElapsed + RunService.Heartbeat:Wait() end
 		local fadeTime = 0.35
 		local elapsed = 0
 		local conn
@@ -699,21 +700,21 @@ local function playLeapAnimation(tower: Model, dest: Vector3, onComplete: () -> 
 
 					performLeapingSlash(tower, slashTarget)
 
-					-- Smooth recovery
+					-- Smooth recovery using Heartbeat for frame-accurate timing
 					task.spawn(function()
-						local recFrames = 8
 						local recTime = 0.25
-						local recDt = recTime / recFrames
 						local rsStart = rs and rs.C0
 						local lsStart = ls and ls.C0
 						local nkStart = nk and nk.C0
-						for f = 1, recFrames do
-							local rt = f / recFrames
+						local recElapsed = 0
+						while recElapsed < recTime do
+							local dt = RunService.Heartbeat:Wait()
+							recElapsed = recElapsed + dt
+							local rt = math.clamp(recElapsed / recTime, 0, 1)
 							rt = rt * rt * (3 - 2 * rt)
 							if rs and rs.Parent and rsBase then rs.C0 = rsStart:Lerp(rsBase, rt) end
 							if ls and ls.Parent and lsBase then ls.C0 = lsStart:Lerp(lsBase, rt) end
 							if nk and nk.Parent and nkBase then nk.C0 = nkStart:Lerp(nkBase, rt) end
-							task.wait(recDt)
 						end
 					end)
 
@@ -756,7 +757,7 @@ local function playAttackAnimation(tower: Model, target: Model)
 		local totalTime = 0.35
 		local stepTime = totalTime / STEPS
 
-		-- Keyframes: {alpha, rsAngles, lsAngles, nkAngles}
+		-- Keyframes: {rsAngles, lsAngles, nkAngles}
 		local keyframes = {
 			{ CFrame.Angles(-2.2, 0.5, 0.4),   CFrame.Angles(0.4, 0.1, -0.3),   CFrame.Angles(0.1, -0.15, 0) },   -- wind up
 			{ CFrame.Angles(-1.0, 0.2, 0.1),   CFrame.Angles(0.1, 0.05, -0.1),  CFrame.Angles(0.05, -0.05, 0) },  -- mid wind
@@ -770,18 +771,18 @@ local function playAttackAnimation(tower: Model, target: Model)
 			if not rs or not rs.Parent then d.animating = false return end
 
 			local kf = keyframes[i]
-			local frames = 4
-			local frameDt = stepTime / frames
-
-			-- Get current offsets
+			-- Capture starting offsets for this step
 			local rsCur = rs.C0 * d.rsC0:Inverse()
 			local lsCur = (ls and ls.Parent) and (ls.C0 * d.lsC0:Inverse()) or CFrame.new()
 			local nkCur = (nk and nk.Parent) and (nk.C0 * d.nkC0:Inverse()) or CFrame.new()
 
-			for f = 1, frames do
+			-- Interpolate to keyframe using Heartbeat for frame-accurate timing
+			local elapsed = 0
+			while elapsed < stepTime do
+				local dt = RunService.Heartbeat:Wait()
 				if not rs or not rs.Parent then d.animating = false return end
-				local alpha = f / frames
-				-- Smooth step interpolation
+				elapsed = elapsed + dt
+				local alpha = math.clamp(elapsed / stepTime, 0, 1)
 				local t = alpha * alpha * (3 - 2 * alpha)
 
 				rs.C0 = d.rsC0 * rsCur:Lerp(kf[1], t)
@@ -791,8 +792,6 @@ local function playAttackAnimation(tower: Model, target: Model)
 				if nk and nk.Parent and d.nkC0 then
 					nk.C0 = d.nkC0 * nkCur:Lerp(kf[3], t)
 				end
-
-				task.wait(frameDt)
 			end
 		end
 
@@ -840,17 +839,18 @@ local function playEnemyPunchAnimation(enemy: Model, tower: Model)
 
 	if not pS or not pB then d.animating = false return end
 
-	-- Smooth interpolation helper
-	local function tweenMotor(motor, base, targetOffset, duration, steps)
+	-- Smooth interpolation helper using Heartbeat for frame-accurate timing
+	local function tweenMotor(motor, base, targetOffset, duration)
 		if not motor or not motor.Parent or not base then return end
-		steps = steps or 4
 		local startOffset = motor.C0 * base:Inverse()
-		for f = 1, steps do
+		local elapsed = 0
+		while elapsed < duration do
+			local dt = RunService.Heartbeat:Wait()
 			if not motor or not motor.Parent then return end
-			local t = f / steps
+			elapsed = elapsed + dt
+			local t = math.clamp(elapsed / duration, 0, 1)
 			t = t * t * (3 - 2 * t) -- smoothstep
 			motor.C0 = base * startOffset:Lerp(targetOffset, t)
-			task.wait(duration / steps)
 		end
 	end
 
@@ -861,30 +861,33 @@ local function playEnemyPunchAnimation(enemy: Model, tower: Model)
 		local nkTarget   = CFrame.Angles(0.1, hD * 0.1, 0)
 
 		-- Parallel tween all joints for wind-up
-		local t1 = task.spawn(function() tweenMotor(pS, pB, windTarget, 0.1, 5) end)
-		local t2 = task.spawn(function() tweenMotor(oS, oB, offTarget, 0.1, 5) end)
+		task.spawn(function() tweenMotor(pS, pB, windTarget, 0.1) end)
+		task.spawn(function() tweenMotor(oS, oB, offTarget, 0.1) end)
 		if nk and nk.Parent and d.nkC0 then
-			task.spawn(function() tweenMotor(nk, d.nkC0, nkTarget, 0.1, 5) end)
+			task.spawn(function() tweenMotor(nk, d.nkC0, nkTarget, 0.1) end)
 		end
-		task.wait(0.1)
+		local waitElapsed = 0
+		while waitElapsed < 0.1 do waitElapsed = waitElapsed + RunService.Heartbeat:Wait() end
 
 		-- Punch forward (fast)
 		if not pS or not pS.Parent then d.animating = false return end
 		local punchTarget = CFrame.Angles(-1.5, -hD * 0.15, -hD * 0.15)
-		tweenMotor(pS, pB, punchTarget, 0.06, 3)
+		tweenMotor(pS, pB, punchTarget, 0.06)
 
 		-- Hold briefly
-		task.wait(0.06)
+		local holdElapsed = 0
+		while holdElapsed < 0.06 do holdElapsed = holdElapsed + RunService.Heartbeat:Wait() end
 
 		-- Retract smoothly
 		if not pS or not pS.Parent then d.animating = false return end
-		tweenMotor(pS, pB, CFrame.Angles(-0.3, 0, 0), 0.08, 4)
-		if oS and oS.Parent and oB then tweenMotor(oS, oB, CFrame.new(), 0.06, 3) end
-		if nk and nk.Parent and d.nkC0 then tweenMotor(nk, d.nkC0, CFrame.new(), 0.06, 3) end
+		tweenMotor(pS, pB, CFrame.Angles(-0.3, 0, 0), 0.08)
+		if oS and oS.Parent and oB then tweenMotor(oS, oB, CFrame.new(), 0.06) end
+		if nk and nk.Parent and d.nkC0 then tweenMotor(nk, d.nkC0, CFrame.new(), 0.06) end
 
 		-- Return to idle
-		task.wait(0.04)
-		if pS and pS.Parent and pB then tweenMotor(pS, pB, CFrame.new(), 0.08, 4) end
+		local idleElapsed = 0
+		while idleElapsed < 0.04 do idleElapsed = idleElapsed + RunService.Heartbeat:Wait() end
+		if pS and pS.Parent and pB then tweenMotor(pS, pB, CFrame.new(), 0.08) end
 
 		d.animating = false
 	end)

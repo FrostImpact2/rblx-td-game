@@ -29,6 +29,7 @@ local hoverGuis = {}
 local hpGuis = {}
 local activeTweens = {}
 local barAttachments = {} -- model → Attachment
+local barLocalOffsets = {} -- model → Vector3 (cached local offset, computed once)
 
 -- === CONFIG ===
 local EXPAND_TIME = 0.15
@@ -63,12 +64,13 @@ local function updateAttachmentPosition(enemyModel: Model)
 	local root = enemyModel.PrimaryPart
 	if not root then return end
 
-	local cframe, size = enemyModel:GetBoundingBox()
-	local centerTopWorld = cframe.Position + Vector3.new(0, size.Y / 2 + HP_BAR_GAP, 0)
-
-	-- Convert world position to local offset relative to root
-	local localOffset = root.CFrame:PointToObjectSpace(centerTopWorld)
-	attachment.Position = localOffset
+	-- Cache local offset on first computation; model geometry doesn't change
+	if not barLocalOffsets[enemyModel] then
+		local cframe, size = enemyModel:GetBoundingBox()
+		local centerTopWorld = cframe.Position + Vector3.new(0, size.Y / 2 + HP_BAR_GAP, 0)
+		barLocalOffsets[enemyModel] = root.CFrame:PointToObjectSpace(centerTopWorld)
+	end
+	attachment.Position = barLocalOffsets[enemyModel]
 end
 
 -- ============================================================
@@ -335,7 +337,7 @@ end
 -- HOVER + HP UPDATE
 -- ============================================================
 
-RunService.RenderStepped:Connect(function()
+RunService.RenderStepped:Connect(function(dt)
 	local target = mouse.Target
 	local enemyModel = getEnemyFromPart(target)
 
@@ -351,11 +353,11 @@ RunService.RenderStepped:Connect(function()
 		end
 	end
 
-	-- Update HP bars + attachment positions every frame
+	-- Update HP bars every frame
 	for model, gui in pairs(hpGuis) do
 		if model and model.Parent then
-			-- Keep attachment centered
-			updateAttachmentPosition(model)
+			-- Attachment position is set by updateAttachmentPosition (called during bar creation)
+			-- and cached in barLocalOffsets; no per-frame update needed
 
 			local hp    = model:GetAttribute("HP") or 0
 			local maxHp = model:GetAttribute("MaxHP") or 1
@@ -371,12 +373,18 @@ RunService.RenderStepped:Connect(function()
 			if hpBg then
 				local fill = hpBg:FindFirstChild("HPBarFill")
 				if fill then
-					fill.Size = UDim2.new(ratio, 0, 1, 0)
+					-- Smoothly lerp the fill bar toward the actual ratio
+					local currentRatio = fill.Size.X.Scale
+					local smoothed = currentRatio + (ratio - currentRatio) * math.min(dt * 10, 1)
+					fill.Size = UDim2.new(smoothed, 0, 1, 0)
 				end
 
 				local hpText = hpBg:FindFirstChild("HPText")
 				if hpText then
-					hpText.Text = tostring(hp) .. "/" .. tostring(maxHp)
+					local newText = tostring(hp) .. "/" .. tostring(maxHp)
+					if hpText.Text ~= newText then
+						hpText.Text = newText
+					end
 				end
 			end
 		else
@@ -444,6 +452,8 @@ enemiesFolder.ChildRemoved:Connect(function(child)
 		end
 		barAttachments[child] = nil
 	end
+
+	barLocalOffsets[child] = nil
 
 	if pinnedEnemy == child then
 		pinnedEnemy = nil
