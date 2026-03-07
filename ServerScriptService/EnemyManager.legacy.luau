@@ -175,15 +175,17 @@ local function startWalkAnimation(enemyModel: Model)
 
 	local elapsed = math.random() * math.pi * 2
 	local wasWalking = true
+	local stopBlend = 1
 
-	local CYCLE_SPEED  = 5.5
-	local LEG_STRIDE   = 0.6
-	local STEP_HEIGHT  = 0.3
-	local PUSH_TILT    = 0.5
-	local ARM_SWING    = 0.4
-	local ARM_BEND     = 0.2
-	local BODY_BOB     = 0.15
-	local HEAD_COUNTER = 0.05
+	local CYCLE_SPEED      = 5.5
+	local LEG_STRIDE       = 0.6
+	local STEP_HEIGHT      = 0.3
+	local PUSH_TILT        = 0.5
+	local ARM_SWING        = 0.4
+	local ARM_BEND         = 0.2
+	local BODY_BOB         = 0.15
+	local HEAD_COUNTER     = 0.05
+	local STOP_BLEND_SPEED = 12  -- blend to idle in ~0.083s when walk stops
 
 	local connection = RunService.Heartbeat:Connect(function(dt)
 		if not torso or not torso.Parent then return end
@@ -192,16 +194,22 @@ local function startWalkAnimation(enemyModel: Model)
 		if stopped then
 			if wasWalking then
 				wasWalking = false
-				if leftHip and lhC0 then leftHip.C0 = lhC0 end
-				if rightHip and rhC0 then rightHip.C0 = rhC0 end
-				if leftShoulder and lsC0 then leftShoulder.C0 = lsC0 end
-				if rightShoulder and rsC0 then rightShoulder.C0 = rsC0 end
-				if neck and nkC0 then neck.C0 = nkC0 end
+				stopBlend = 0
+			end
+			if stopBlend < 1 then
+				stopBlend = math.min(stopBlend + dt * STOP_BLEND_SPEED, 1)
+				local b = stopBlend * stopBlend * (3 - 2 * stopBlend)
+				if leftHip and lhC0 then leftHip.C0 = leftHip.C0:Lerp(lhC0, b) end
+				if rightHip and rhC0 then rightHip.C0 = rightHip.C0:Lerp(rhC0, b) end
+				if leftShoulder and lsC0 then leftShoulder.C0 = leftShoulder.C0:Lerp(lsC0, b) end
+				if rightShoulder and rsC0 then rightShoulder.C0 = rightShoulder.C0:Lerp(rsC0, b) end
+				if neck and nkC0 then neck.C0 = neck.C0:Lerp(nkC0, b) end
 			end
 			return
 		end
 
 		wasWalking = true
+		stopBlend = 1
 		elapsed = elapsed + dt * CYCLE_SPEED
 		local sin = math.sin(elapsed)
 		local cos = math.cos(elapsed)
