@@ -3,15 +3,16 @@
 	Place in ServerScriptService/Towers/
 
 	Contains all Warrior-specific tower logic:
-	  - Model creation (procedural body + sword)
+	  - Model creation (cloned from ReplicatedStorage.TowerModels.Warrior)
 	  - Abilities: Cleave (basic attack), Leaping Slash (AOE), Relentless Advance (leap-move)
 	  - Passive: Survivor (out-of-combat burst healing)
-	  - Animations: walk, attack (Cleave), leap
+	  - Animations: walk (Animation-based), attack (Animation-based), leap (Motor6D-based)
 	  - VFX: hit particles, slash, heal, leap trail
 ]]
 
-local RunService = game:GetService("RunService")
-local Workspace  = game:GetService("Workspace")
+local RunService        = game:GetService("RunService")
+local Workspace         = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Warrior = {}
 
@@ -32,32 +33,30 @@ Warrior.SURVIVOR_HEAL_INTERVAL = 3
 Warrior.SURVIVOR_HEAL_PERCENT  = 0.02
 
 -- ============================================================
--- INTERNAL PART / MOTOR HELPERS
+-- INTERNAL ANIMATION HELPERS
 -- ============================================================
 
-local function makePart(name: string, size: Vector3, color: Color3, parent: Instance): Part
-	local p = Instance.new("Part")
-	p.Name           = name
-	p.Size           = size
-	p.Color          = color
-	p.Anchored       = false
-	p.CanCollide     = false
-	p.Material       = Enum.Material.SmoothPlastic
-	p.TopSurface     = Enum.SurfaceType.Smooth
-	p.BottomSurface  = Enum.SurfaceType.Smooth
-	p.Parent         = parent
-	return p
-end
-
-local function makeMotor(name: string, part0: BasePart, part1: BasePart, c0: CFrame, c1: CFrame?): Motor6D
-	local m = Instance.new("Motor6D")
-	m.Name  = name
-	m.Part0 = part0
-	m.Part1 = part1
-	m.C0    = c0
-	m.C1    = c1 or CFrame.new()
-	m.Parent = part0
-	return m
+local function getOrCreateAnimator(towerModel: Model): Animator?
+	local humanoid = towerModel:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		local animator = humanoid:FindFirstChildOfClass("Animator")
+		if not animator then
+			animator = Instance.new("Animator")
+			animator.Parent = humanoid
+		end
+		return animator
+	end
+	local animController = towerModel:FindFirstChildOfClass("AnimationController")
+	if animController then
+		local animator = animController:FindFirstChildOfClass("Animator")
+		if not animator then
+			animator = Instance.new("Animator")
+			animator.Parent = animController
+		end
+		return animator
+	end
+	warn("[Warrior] No Humanoid or AnimationController found in model, can't animate")
+	return nil
 end
 
 -- ============================================================
@@ -282,47 +281,22 @@ function Warrior.CreateModel(position: Vector3, TowerStats: any, leapRangeMult: 
 	local template = TowerStats.Templates["Warrior"]
 	if not template then return nil end
 
-	local model = Instance.new("Model")
-	model.Name  = "Warrior"
+	-- Clone the pre-built model from ReplicatedStorage
+	local towerModels = ReplicatedStorage:FindFirstChild("TowerModels")
+	local templateModel = towerModels and towerModels:FindFirstChild("Warrior")
+	if not templateModel then
+		warn("[Warrior] ReplicatedStorage.TowerModels.Warrior not found")
+		return nil
+	end
 
-	-- Body
-	local torso = makePart("HumanoidRootPart", Vector3.new(2, 2.4, 1.2), Color3.fromRGB(60, 90, 150), model)
-	torso.Anchored  = true
-	model.PrimaryPart = torso
+	local model = templateModel:Clone()
+	model.Name = "Warrior"
 
-	local head = makePart("Head", Vector3.new(1.4, 1.4, 1.4), Color3.fromRGB(90, 120, 180), model)
-	makeMotor("Neck", torso, head, CFrame.new(0, 1.2, 0), CFrame.new(0, -0.7, 0))
+	if model.PrimaryPart then
+		model.PrimaryPart.Anchored = true
+	end
 
-	local lArm = makePart("LeftArm", Vector3.new(0.8, 2.4, 1), Color3.fromRGB(70, 100, 160), model)
-	makeMotor("LeftShoulder", torso, lArm, CFrame.new(-1.4, 0.8, 0), CFrame.new(0, 1.0, 0))
-
-	local rArm = makePart("RightArm", Vector3.new(0.8, 2.4, 1), Color3.fromRGB(70, 100, 160), model)
-	makeMotor("RightShoulder", torso, rArm, CFrame.new(1.4, 0.8, 0), CFrame.new(0, 1.0, 0))
-
-	-- Sword
-	local handle = makePart("Handle", Vector3.new(0.18, 0.7, 0.18), Color3.fromRGB(60, 45, 30), model)
-	makeMotor("HandleGrip", rArm, handle,
-		CFrame.new(0, -1.2, 0) * CFrame.Angles(math.rad(-20), 0, 0),
-		CFrame.new(0, 0.3, 0))
-
-	local guard = makePart("Guard", Vector3.new(0.55, 0.1, 0.2), Color3.fromRGB(180, 160, 50), model)
-	makeMotor("GuardJoint", handle, guard, CFrame.new(0, -0.35, 0), CFrame.new())
-
-	local blade = makePart("Blade", Vector3.new(0.08, 2.4, 0.3), Color3.fromRGB(200, 200, 215), model)
-	makeMotor("BladeJoint", guard, blade, CFrame.new(0, -0.06, 0), CFrame.new(0, 1.2, 0))
-
-	local edgePart = makePart("BladeEdge", Vector3.new(0.02, 2.2, 0.08), Color3.fromRGB(240, 240, 255), model)
-	edgePart.Material = Enum.Material.Neon
-	makeMotor("EdgeJoint", blade, edgePart, CFrame.new(0, 0, -0.12), CFrame.new())
-
-	-- Legs
-	local lLeg = makePart("LeftLeg", Vector3.new(0.9, 2.4, 1), Color3.fromRGB(50, 70, 120), model)
-	makeMotor("LeftHip", torso, lLeg, CFrame.new(-0.5, -1.2, 0), CFrame.new(0, 1.2, 0))
-
-	local rLeg = makePart("RightLeg", Vector3.new(0.9, 2.4, 1), Color3.fromRGB(50, 70, 120), model)
-	makeMotor("RightHip", torso, rLeg, CFrame.new(0.5, -1.2, 0), CFrame.new(0, 1.2, 0))
-
-	-- Range indicators
+	-- Range indicators (gameplay indicators, created programmatically)
 	local rangeStuds = template.RNG
 
 	local circle = Instance.new("Part")
@@ -376,54 +350,89 @@ end
 -- ============================================================
 
 local function createConeIndicator(position: Vector3, direction: Vector3, coneRange: number, coneAngle: number)
-	local anchor   = Instance.new("Folder")
-	anchor.Name    = "ConeFlash"
-	local groundY  = position.Y - 2
-	local segments = 16
-	local segAngle = (coneAngle * 2) / segments
-	local yaw      = math.atan2(direction.X, direction.Z)
+	local groundY = position.Y - 2
+	local yaw     = math.atan2(direction.X, direction.Z)
 
-	for i = 0, segments - 1 do
-		local a1   = -coneAngle + segAngle * i
-		local a2   = -coneAngle + segAngle * (i + 1)
-		local dir1 = Vector3.new(math.sin(yaw + a1), 0, math.cos(yaw + a1))
-		local dir2 = Vector3.new(math.sin(yaw + a2), 0, math.cos(yaw + a2))
-		local p1   = Vector3.new(position.X, groundY, position.Z) + dir1 * coneRange
-		local p2   = Vector3.new(position.X, groundY, position.Z) + dir2 * coneRange
-		local center = Vector3.new(position.X, groundY, position.Z)
-		local mid  = (center + p1 + p2) / 3
-		local span = math.max((p1 - p2).Magnitude, 0.1)
+	-- Expanding shockwave ring
+	local ring = Instance.new("Part")
+	ring.Name         = "ShockwaveRing"
+	ring.Shape        = Enum.PartType.Cylinder
+	ring.Size         = Vector3.new(0.12, 0.5, 0.5)
+	ring.Color        = Color3.fromRGB(255, 140, 20)
+	ring.Material     = Enum.Material.Neon
+	ring.Transparency = 0.1
+	ring.Anchored     = true
+	ring.CanCollide   = false
+	ring.CFrame       = CFrame.new(position.X, groundY, position.Z) * CFrame.Angles(0, 0, math.rad(90))
+	ring.Parent       = Workspace
 
-		local seg = Instance.new("Part")
-		seg.Size        = Vector3.new(span, 0.08, coneRange)
-		seg.Color       = Color3.fromRGB(255, 200, 60)
-		seg.Material    = Enum.Material.Neon
-		seg.Transparency = 0.3
-		seg.Anchored    = true
-		seg.CanCollide  = false
-		seg.CFrame      = CFrame.new(mid, mid + Vector3.new(direction.X, 0, direction.Z))
-		seg.Parent      = anchor
+	-- Ground scorch (flat disc that flashes bright then fades)
+	local scorch = Instance.new("Part")
+	scorch.Name         = "Scorch"
+	scorch.Shape        = Enum.PartType.Cylinder
+	scorch.Size         = Vector3.new(0.1, coneRange * 1.5, coneRange * 1.5)
+	scorch.Color        = Color3.fromRGB(220, 80, 20)
+	scorch.Material     = Enum.Material.Neon
+	scorch.Transparency = 0.3
+	scorch.Anchored     = true
+	scorch.CanCollide   = false
+	scorch.CFrame       = CFrame.new(position.X, groundY - 0.05, position.Z) * CFrame.Angles(0, 0, math.rad(90))
+	scorch.Parent       = Workspace
+
+	-- Radial slash lines radiating outward within the cone angle
+	local NUM_LINES = 7
+	local lines     = {}
+	for i = 1, NUM_LINES do
+		local t        = (i - 1) / (NUM_LINES - 1)
+		local angle    = -coneAngle + t * (coneAngle * 2)
+		local lineDir  = Vector3.new(math.sin(yaw + angle), 0, math.cos(yaw + angle))
+		local midPos   = Vector3.new(position.X, groundY, position.Z) + lineDir * (coneRange * 0.5)
+
+		local line = Instance.new("Part")
+		line.Name         = "SlashLine"
+		line.Size         = Vector3.new(0.1, 0.08, coneRange)
+		line.Color        = Color3.fromRGB(255, 200, 60)
+		line.Material     = Enum.Material.Neon
+		line.Transparency = 0.0
+		line.Anchored     = true
+		line.CanCollide   = false
+		line.CFrame       = CFrame.new(midPos, midPos + lineDir)
+		line.Parent       = Workspace
+		table.insert(lines, line)
 	end
 
-	anchor.Parent = Workspace
-
+	-- Animate: expand ring + fade everything over ~0.4 seconds
 	task.spawn(function()
-		task.wait(0.1)
-		local fadeTime = 0.35
-		local elapsed  = 0
+		local elapsed   = 0
+		local totalTime = 0.4
 		local conn
 		conn = RunService.Heartbeat:Connect(function(dt)
 			elapsed = elapsed + dt
-			local a      = math.clamp(elapsed / fadeTime, 0, 1)
+			local a      = math.clamp(elapsed / totalTime, 0, 1)
 			local smooth = a * a * (3 - 2 * a)
-			for _, part in ipairs(anchor:GetChildren()) do
-				if part:IsA("Part") then
-					part.Transparency = 0.3 + 0.7 * smooth
+
+			-- Expand ring outward to match cone range
+			local ringDiam = coneRange * 2 * smooth
+			ring.Size         = Vector3.new(0.12, math.max(ringDiam, 0.5), math.max(ringDiam, 0.5))
+			ring.Transparency = 0.1 + 0.9 * smooth
+
+			-- Fade scorch
+			scorch.Transparency = 0.3 + 0.7 * smooth
+
+			-- Fade radial lines
+			for _, ln in ipairs(lines) do
+				if ln and ln.Parent then
+					ln.Transparency = smooth
 				end
 			end
+
 			if a >= 1 then
 				conn:Disconnect()
-				anchor:Destroy()
+				ring:Destroy()
+				scorch:Destroy()
+				for _, ln in ipairs(lines) do
+					if ln and ln.Parent then ln:Destroy() end
+				end
 			end
 		end)
 	end)
@@ -667,19 +676,14 @@ end
 -- ATTACK ANIMATION  (Cleave – basic melee swing)
 -- ============================================================
 
-local attackAnimData = {}   -- tower -> { rsC0, lsC0, nkC0, animating }
+local attackAnimData = {}   -- tower -> { animating = false }
 
 function Warrior.PlayAttackAnimation(tower: Model, target: Model)
 	local torso = tower.PrimaryPart
 	if not torso then return end
 
-	local rs = torso:FindFirstChild("RightShoulder")
-	local ls = torso:FindFirstChild("LeftShoulder")
-	local nk = torso:FindFirstChild("Neck")
-	if not rs then return end
-
 	if not attackAnimData[tower] then
-		attackAnimData[tower] = { rsC0 = rs.C0, lsC0 = ls and ls.C0, nkC0 = nk and nk.C0, animating = false }
+		attackAnimData[tower] = { animating = false }
 	end
 	local d = attackAnimData[tower]
 	if d.animating then return end
@@ -695,46 +699,20 @@ function Warrior.PlayAttackAnimation(tower: Model, target: Model)
 	end
 
 	task.spawn(function()
-		local STEPS     = 6
-		local totalTime = 0.35
-		local stepTime  = totalTime / STEPS
+		local animator = getOrCreateAnimator(tower)
+		if not animator then d.animating = false return end
 
-		local keyframes = {
-			{ CFrame.Angles(-2.2, 0.5, 0.4),   CFrame.Angles(0.4, 0.1, -0.3),   CFrame.Angles(0.1, -0.15, 0)  },
-			{ CFrame.Angles(-1.0, 0.2, 0.1),   CFrame.Angles(0.1, 0.05, -0.1),  CFrame.Angles(0.05, -0.05, 0) },
-			{ CFrame.Angles(0.4, -0.5, -0.6),  CFrame.Angles(-0.3, -0.1, 0.2),  CFrame.Angles(-0.1, 0.1, 0)   },
-			{ CFrame.Angles(0.8, -0.7, -0.8),  CFrame.Angles(-0.4, -0.15, 0.3), CFrame.Angles(-0.15, 0.12, 0) },
-			{ CFrame.Angles(-0.2, 0.1, 0.1),   CFrame.Angles(-0.05, 0, 0.05),   CFrame.Angles(0, 0, 0)        },
-			{ CFrame.Angles(0, 0, 0),           CFrame.Angles(0, 0, 0),           CFrame.Angles(0, 0, 0)        },
-		}
+		local animObj = Instance.new("Animation")
+		animObj.AnimationId = "rbxassetid://100041859398995"
 
-		for i = 1, STEPS do
-			if not rs or not rs.Parent then d.animating = false return end
+		local track = animator:LoadAnimation(animObj)
+		animObj:Destroy()  -- No longer needed after loading
 
-			local kf     = keyframes[i]
-			local frames = 4
-			local frameDt = stepTime / frames
+		track.Priority = Enum.AnimationPriority.Action
+		track.Looped   = false
+		track:Play()
 
-			local rsCur = rs.C0 * d.rsC0:Inverse()
-			local lsCur = (ls and ls.Parent and d.lsC0) and (ls.C0 * d.lsC0:Inverse()) or CFrame.new()
-			local nkCur = (nk and nk.Parent and d.nkC0) and (nk.C0 * d.nkC0:Inverse()) or CFrame.new()
-
-			for f = 1, frames do
-				if not rs or not rs.Parent then d.animating = false return end
-				local t = f / frames
-				t = t * t * (3 - 2 * t)
-
-				rs.C0 = d.rsC0 * rsCur:Lerp(kf[1], t)
-				if ls and ls.Parent and d.lsC0 then ls.C0 = d.lsC0 * lsCur:Lerp(kf[2], t) end
-				if nk and nk.Parent and d.nkC0 then nk.C0 = d.nkC0 * nkCur:Lerp(kf[3], t) end
-
-				task.wait(frameDt)
-			end
-		end
-
-		if rs and rs.Parent then rs.C0 = d.rsC0 end
-		if ls and ls.Parent then ls.C0 = d.lsC0 end
-		if nk and nk.Parent then nk.C0 = d.nkC0 end
+		track.Stopped:Wait()
 		d.animating = false
 	end)
 end
@@ -743,8 +721,8 @@ end
 -- WALK ANIMATION
 -- ============================================================
 
-local walkConnections = {}   -- model -> RBXScriptConnection
-local baseC0s         = {}   -- model -> { motorName -> C0 }
+local walkTracks = {}   -- model -> AnimationTrack
+local baseC0s    = {}   -- model -> { motorName -> C0 }
 
 function Warrior.StoreBaseC0s(model: Model)
 	if baseC0s[model] then return end
@@ -770,77 +748,31 @@ function Warrior.RestoreBaseC0s(model: Model)
 end
 
 function Warrior.StartWalk(model: Model)
-	if walkConnections[model] then return end
-	local torso = model.PrimaryPart
-	if not torso then return end
+	if walkTracks[model] then return end
+	local animator = getOrCreateAnimator(model)
+	if not animator then return end
 
-	Warrior.StoreBaseC0s(model)
-	local s   = baseC0s[model]
-	local lsC0 = s["LeftShoulder"]
-	local rsC0 = s["RightShoulder"]
-	local lhC0 = s["LeftHip"]
-	local rhC0 = s["RightHip"]
-	local nkC0 = s["Neck"]
+	local walkAnimObj = model:FindFirstChild("WalkAnim")
+	if not walkAnimObj then
+		walkAnimObj = Instance.new("Animation")
+		walkAnimObj.Name        = "WalkAnim"
+		walkAnimObj.AnimationId = "rbxassetid://73323871613223"
+		walkAnimObj.Parent      = model
+	end
 
-	local lS = torso:FindFirstChild("LeftShoulder")
-	local rS = torso:FindFirstChild("RightShoulder")
-	local lH = torso:FindFirstChild("LeftHip")
-	local rH = torso:FindFirstChild("RightHip")
-	local nk = torso:FindFirstChild("Neck")
-
-	local elapsed = 0
-
-	walkConnections[model] = RunService.Heartbeat:Connect(function(dt)
-		if not torso or not torso.Parent then return end
-		elapsed = elapsed + dt * 5.5
-
-		local sin     = math.sin(elapsed)
-		local cos     = math.cos(elapsed)
-		local abs_sin = math.abs(sin)
-
-		local bob     = math.abs(math.sin(elapsed * 2)) * 0.15
-		local lean    = math.sin(elapsed * 2) * 0.04
-		local sway    = sin * 0.02
-		local breathe = math.sin(elapsed * 0.7) * 0.01
-
-		-- Left leg
-		local lY, lZ, lA
-		if sin > 0 then
-			local smoothT = sin * sin * (3 - 2 * sin)
-			lY = smoothT * 0.3; lZ = -sin * 0.6; lA = -cos * 0.08
-		else
-			local p = -sin; local smoothP = p * p * (3 - 2 * p)
-			lY = (1 - smoothP) * smoothP * 0.3; lZ = -sin * 0.6; lA = sin * 0.5
-		end
-
-		-- Right leg
-		local rY, rZ, rA
-		if sin < 0 then
-			local t = -sin; local smoothT = t * t * (3 - 2 * t)
-			rY = smoothT * 0.3; rZ = sin * 0.6; rA = cos * 0.08
-		else
-			local p = sin; local smoothP = p * p * (3 - 2 * p)
-			rY = (1 - smoothP) * smoothP * 0.3; rZ = sin * 0.6; rA = -sin * 0.5
-		end
-
-		if lH and lhC0 then lH.C0 = lhC0 * CFrame.new(0, -bob + lY, lZ) * CFrame.Angles(lA, 0, 0) end
-		if rH and rhC0 then rH.C0 = rhC0 * CFrame.new(0, -bob + rY, rZ) * CFrame.Angles(rA, 0, 0) end
-
-		local lArmSwing = -sin * 0.4
-		local rArmSwing =  sin * 0.4
-		local elbowBend = abs_sin * 0.2
-
-		if lS and lsC0 then lS.C0 = lsC0 * CFrame.Angles(lArmSwing + lean + breathe, 0,  elbowBend + sway) end
-		if rS and rsC0 then rS.C0 = rsC0 * CFrame.Angles(rArmSwing + lean + breathe, 0, -elbowBend + sway) end
-		if nk and nkC0 then nk.C0 = nkC0 * CFrame.new(0, bob, 0) * CFrame.Angles(-sin * 0.05 - lean, sin * 0.015, -sway) end
-	end)
+	local track = animator:LoadAnimation(walkAnimObj)
+	track.Looped   = true
+	track.Priority = Enum.AnimationPriority.Movement
+	track:Play()
+	walkTracks[model] = track
 end
 
 function Warrior.StopWalk(model: Model)
-	local c = walkConnections[model]
-	if c then
-		c:Disconnect()
-		walkConnections[model] = nil
+	local track = walkTracks[model]
+	if track then
+		track:Stop()
+		track:Destroy()
+		walkTracks[model] = nil
 	end
 	Warrior.RestoreBaseC0s(model)
 end
@@ -852,10 +784,11 @@ end
 function Warrior.CleanupTower(tower: Model)
 	attackAnimData[tower] = nil
 	baseC0s[tower]        = nil
-	local c = walkConnections[tower]
-	if c then
-		c:Disconnect()
-		walkConnections[tower] = nil
+	local track = walkTracks[tower]
+	if track then
+		track:Stop()
+		track:Destroy()
+		walkTracks[tower] = nil
 	end
 end
 
