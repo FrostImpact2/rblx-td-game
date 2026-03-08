@@ -7,7 +7,7 @@
 
 local TowerStats = {}
 
-TowerStats.Templates = {
+TowerStats.Templates = { 
 	Warrior = {
 		ATK      = 10,
 		ATK_SPD  = 1.2,   -- attacks per second

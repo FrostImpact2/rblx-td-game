@@ -24,21 +24,27 @@ local enemiesFolder = Workspace:WaitForChild("Enemies", 15)
 local placeRemote = Instance.new("RemoteEvent"); placeRemote.Name = "PlaceTower"; placeRemote.Parent = ReplicatedStorage
 local moveRemote  = Instance.new("RemoteEvent"); moveRemote.Name = "MoveTower"; moveRemote.Parent = ReplicatedStorage
 
+local playEnemyPunchRemote = ReplicatedStorage:WaitForChild("PlayEnemyPunch", 10)
+
+local PathfindingModule = require(ReplicatedStorage:WaitForChild("PathfindingModule", 10))
+local pathFolder        = Workspace:WaitForChild("Path", 10)
+local cachedWaypoints   = pathFolder and PathfindingModule.BuildWaypoints(pathFolder) or {}
+
 -- ============================================================
 -- CONFIG
 -- ============================================================
 
-local LEAP_SLASH_COOLDOWN   = 5      -- seconds
-local LEAP_SLASH_DAMAGE     = 0.8    -- 80% ATK
+local LEAP_SLASH_COOLDOWN   = 5
+local LEAP_SLASH_DAMAGE     = 0.8
 local LEAP_SLASH_CONE_ANGLE = math.rad(60)
 local LEAP_SLASH_CONE_RANGE_MULT = 1.5
-local LEAP_RANGE_MULT       = 3     -- within 10x RNG to trigger leap
+local LEAP_RANGE_MULT       = 3
 local LEAP_DURATION          = 1
 local LEAP_HEIGHT            = 4
 
-local SURVIVOR_OOC_TIME     = 3      -- seconds out of combat before healing
-local SURVIVOR_HEAL_INTERVAL = 3     -- heal every 3 seconds
-local SURVIVOR_HEAL_PERCENT = 0.02   -- 2% max HP per tick
+local SURVIVOR_OOC_TIME     = 3
+local SURVIVOR_HEAL_INTERVAL = 3
+local SURVIVOR_HEAL_PERCENT = 0.02
 
 -- ============================================================
 -- HELPERS
@@ -60,6 +66,157 @@ local function makeMotor(name, part0, part1, c0, c1)
 	m.C0 = c0; m.C1 = c1 or CFrame.new()
 	m.Parent = part0
 	return m
+end
+
+-- ============================================================
+-- BODY RADIUS (must be before startAggroPush)
+-- ============================================================
+
+local function getBodyRadius(model: Model): number
+	local minX, maxX = math.huge, -math.huge
+	local minZ, maxZ = math.huge, -math.huge
+	local root = model.PrimaryPart
+	if not root then return 1 end
+
+	local rootPos = root.Position
+
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart")
+			and part.Name ~= "RangeCircle"
+			and part.Name ~= "LeapRangeCircle"
+			and part.Name ~= "MoveIndicator"
+		then
+			local pos = part.Position
+			local halfX = part.Size.X / 2
+			local halfZ = part.Size.Z / 2
+			minX = math.min(minX, pos.X - halfX - rootPos.X)
+			maxX = math.max(maxX, pos.X + halfX - rootPos.X)
+			minZ = math.min(minZ, pos.Z - halfZ - rootPos.Z)
+			maxZ = math.max(maxZ, pos.Z + halfZ - rootPos.Z)
+		end
+	end
+
+	local sizeX = maxX - minX
+	local sizeZ = maxZ - minZ
+	return math.max(sizeX, sizeZ) / 2
+end
+
+-- ============================================================
+-- PATH SEGMENT HELPERS
+-- ============================================================
+
+local function closestPointOnSegment(A: Vector3, B: Vector3, P: Vector3): Vector3
+	local AB = B - A
+	local AP = P - A
+	local lengthSq = AB.X * AB.X + AB.Z * AB.Z
+	if lengthSq < 0.001 then return A end
+	local t = math.clamp((AP.X * AB.X + AP.Z * AB.Z) / lengthSq, 0, 1)
+	return Vector3.new(A.X + AB.X * t, 0, A.Z + AB.Z * t)
+end
+
+local function getPathDirection(flatPos: Vector3): Vector3
+	local bestDist = math.huge
+	local bestDir = Vector3.new(1, 0, 0)
+
+	for i = 1, #cachedWaypoints - 1 do
+		local A = cachedWaypoints[i]
+		local B = cachedWaypoints[i + 1]
+		local flatA = Vector3.new(A.X, 0, A.Z)
+		local flatB = Vector3.new(B.X, 0, B.Z)
+
+		local point = closestPointOnSegment(flatA, flatB, flatPos)
+		local dist = (point - flatPos).Magnitude
+
+		if dist < bestDist then
+			bestDist = dist
+			local segDir = flatB - flatA
+			if segDir.Magnitude > 0.01 then
+				bestDir = segDir.Unit
+			end
+		end
+	end
+
+	return bestDir
+end
+
+-- ============================================================
+-- AGGRO PUSH SYSTEM
+-- ============================================================
+
+local activePushes = {}
+
+local function startAggroPush(tower: Model, enemy: Model)
+	if activePushes[enemy] then return end
+
+	local PUSH_SPEED = 8
+
+	local enemyRadius = getBodyRadius(enemy)
+	local towerRadius = getBodyRadius(tower)
+	local minDist = enemyRadius + towerRadius + 0.3
+
+	local conn
+	conn = RunService.Heartbeat:Connect(function(dt)
+		if not enemy or not enemy.Parent or not tower or not tower.Parent then
+			conn:Disconnect()
+			activePushes[enemy] = nil
+			return
+		end
+
+		if not enemy:GetAttribute("Aggroed") then
+			conn:Disconnect()
+			activePushes[enemy] = nil
+			return
+		end
+
+		local enemyRoot = enemy.PrimaryPart
+		local towerRoot = tower.PrimaryPart
+		if not enemyRoot or not towerRoot then
+			conn:Disconnect()
+			activePushes[enemy] = nil
+			return
+		end
+
+		local enemyPos = enemyRoot.Position
+		local towerPos = towerRoot.Position
+
+		local flatEnemy = Vector3.new(enemyPos.X, 0, enemyPos.Z)
+		local flatTower = Vector3.new(towerPos.X, 0, towerPos.Z)
+		local currentDist = (flatEnemy - flatTower).Magnitude
+
+		if currentDist >= minDist then
+			conn:Disconnect()
+			activePushes[enemy] = nil
+			return
+		end
+
+		local pathDir = getPathDirection(flatEnemy)
+
+		local awayFromTower = flatEnemy - flatTower
+		if awayFromTower.Magnitude < 0.01 then
+			awayFromTower = pathDir
+		end
+
+		local pushDir
+		if pathDir:Dot(awayFromTower) >= 0 then
+			pushDir = pathDir
+		else
+			pushDir = -pathDir
+		end
+
+		local remaining = minDist - currentDist
+		local stepSize = math.min(PUSH_SPEED * dt, remaining)
+
+		local nudge = pushDir * stepSize
+		local newPos = Vector3.new(
+			enemyPos.X + nudge.X,
+			enemyPos.Y,
+			enemyPos.Z + nudge.Z
+		)
+
+		enemyRoot.CFrame = CFrame.new(newPos, Vector3.new(towerPos.X, newPos.Y, towerPos.Z))
+	end)
+
+	activePushes[enemy] = conn
 end
 
 -- ============================================================
@@ -86,7 +243,6 @@ local function spawnHitParticles(position: Vector3, color: Color3)
 	emitter.Rate = 0
 	emitter.Parent = attachment
 
-	-- Temporary anchor part
 	local anchor = Instance.new("Part")
 	anchor.Name = "ParticleAnchor"
 	anchor.Size = Vector3.new(0.1, 0.1, 0.1)
@@ -112,7 +268,6 @@ local function spawnSlashParticles(position: Vector3, direction: Vector3)
 	anchor.CFrame = CFrame.new(position, position + direction)
 	anchor.Parent = Workspace
 
-	-- Main directional slash particles
 	local att1 = Instance.new("Attachment"); att1.Parent = anchor
 	local slash = Instance.new("ParticleEmitter")
 	slash.Color = ColorSequence.new(Color3.fromRGB(255, 220, 60), Color3.fromRGB(255, 100, 20))
@@ -136,7 +291,6 @@ local function spawnSlashParticles(position: Vector3, direction: Vector3)
 	slash.Parent = att1
 	slash:Emit(20)
 
-	-- Spark particles (smaller, faster, wider spread)
 	local att2 = Instance.new("Attachment"); att2.Parent = anchor
 	local sparks = Instance.new("ParticleEmitter")
 	sparks.Color = ColorSequence.new(Color3.fromRGB(255, 255, 200))
@@ -157,7 +311,6 @@ local function spawnSlashParticles(position: Vector3, direction: Vector3)
 	sparks.Parent = att2
 	sparks:Emit(12)
 
-	-- Ground impact ring (expanding)
 	local ring = Instance.new("Part")
 	ring.Name = "ImpactRing"; ring.Shape = Enum.PartType.Cylinder
 	ring.Size = Vector3.new(0.1, 0.1, 0.1)
@@ -167,7 +320,6 @@ local function spawnSlashParticles(position: Vector3, direction: Vector3)
 	ring.CFrame = CFrame.new(position.X, position.Y - 2, position.Z) * CFrame.Angles(0, 0, math.rad(90))
 	ring.Parent = Workspace
 
-	-- Shockwave ring
 	local wave = Instance.new("Part")
 	wave.Name = "ImpactRing"; wave.Shape = Enum.PartType.Cylinder
 	wave.Size = Vector3.new(0.05, 0.1, 0.1)
@@ -238,7 +390,7 @@ local function spawnHealParticles(towerModel: Model)
 	emitter.Speed = NumberRange.new(2, 5)
 	emitter.SpreadAngle = Vector2.new(360, 30)
 	emitter.Rate = 0
-	emitter.Acceleration = Vector3.new(0, 6, 0) -- float upward
+	emitter.Acceleration = Vector3.new(0, 6, 0)
 	emitter.Parent = att
 
 	emitter:Emit(12)
@@ -252,7 +404,6 @@ local function spawnLeapTrailParticles(towerModel: Model): () -> ()
 	local torso = towerModel.PrimaryPart
 	if not torso then return function() end end
 
-	-- Main trail
 	local att1 = Instance.new("Attachment"); att1.Name = "LeapTrailAtt"; att1.Parent = torso
 
 	local trail = Instance.new("ParticleEmitter")
@@ -278,7 +429,6 @@ local function spawnLeapTrailParticles(towerModel: Model): () -> ()
 	trail.RotSpeed = NumberRange.new(-100, 100)
 	trail.Parent = att1
 
-	-- Wind streaks (from feet)
 	local att2 = Instance.new("Attachment"); att2.Name = "LeapWindAtt"
 	att2.Position = Vector3.new(0, -1.5, 0)
 	att2.Parent = torso
@@ -331,7 +481,6 @@ local function createTowerModel(templateName: string, position: Vector3): Model
 	local rArm = makePart("RightArm", Vector3.new(0.8, 2.4, 1), Color3.fromRGB(70, 100, 160), model)
 	makeMotor("RightShoulder", torso, rArm, CFrame.new(1.4, 0.8, 0), CFrame.new(0, 1.0, 0))
 
-	-- Sword
 	local handle = makePart("Handle", Vector3.new(0.18, 0.7, 0.18), Color3.fromRGB(60, 45, 30), model)
 	makeMotor("HandleGrip", rArm, handle,
 		CFrame.new(0, -1.2, 0) * CFrame.Angles(math.rad(-20), 0, 0),
@@ -353,7 +502,6 @@ local function createTowerModel(templateName: string, position: Vector3): Model
 	local rLeg = makePart("RightLeg", Vector3.new(0.9, 2.4, 1), Color3.fromRGB(50, 70, 120), model)
 	makeMotor("RightHip", torso, rLeg, CFrame.new(0.5, -1.2, 0), CFrame.new(0, 1.2, 0))
 
-	-- Range circle
 	local rangeStuds = template.RNG
 	local circle = Instance.new("Part")
 	circle.Name = "RangeCircle"; circle.Shape = Enum.PartType.Cylinder
@@ -362,18 +510,14 @@ local function createTowerModel(templateName: string, position: Vector3): Model
 	circle.Color = Color3.fromRGB(30, 100, 200); circle.Transparency = 1
 	circle.Material = Enum.Material.SmoothPlastic; circle.Parent = model
 
-	-- Leap range indicator (larger circle, different color, hidden by default)
 	local leapRange = rangeStuds * LEAP_RANGE_MULT
 	local leapCircle = Instance.new("Part")
 	leapCircle.Name = "LeapRangeCircle"; leapCircle.Shape = Enum.PartType.Cylinder
 	leapCircle.Size = Vector3.new(0.1, leapRange * 2, leapRange * 2)
 	leapCircle.Anchored = true; leapCircle.CanCollide = false
-	circle.Color = Color3.fromRGB(30, 100, 200); leapCircle.Transparency = 1.2
+	leapCircle.Color = Color3.fromRGB(30, 100, 200); leapCircle.Transparency = 1.2
 	leapCircle.Material = Enum.Material.Neon; leapCircle.Parent = model
-	
-	
 
-	-- Attributes
 	model:SetAttribute("ATK", template.ATK)
 	model:SetAttribute("ATK_SPD", template.ATK_SPD)
 	model:SetAttribute("RNG", rangeStuds)
@@ -386,7 +530,7 @@ local function createTowerModel(templateName: string, position: Vector3): Model
 	model:SetAttribute("Owner", "")
 	model:SetAttribute("LastCombatTime", tick())
 	model:SetAttribute("LastHealTick", tick())
-	model:SetAttribute("LeapSlashCooldown", 0)       -- timestamp when cooldown ends
+	model:SetAttribute("LeapSlashCooldown", 0)
 	model:SetAttribute("LeapSlashMaxCD", LEAP_SLASH_COOLDOWN)
 
 	model:PivotTo(CFrame.new(position))
@@ -437,6 +581,12 @@ local function findNearestEnemy(pos: Vector3, range: number): Model?
 	return best
 end
 
+local function isTowerInAttackRange(tower: Model, enemy: Model): boolean
+	local torso = tower.PrimaryPart
+	if not torso or not enemy.PrimaryPart then return false end
+	return (enemy.PrimaryPart.Position - torso.Position).Magnitude <= (tower:GetAttribute("RNG") or 8)
+end
+
 -- ============================================================
 -- LEAPING SLASH (cone AOE, 80% ATK, with cooldown)
 -- ============================================================
@@ -459,7 +609,6 @@ local function createConeIndicator(position: Vector3, direction: Vector3, coneRa
 	local segAngle = (coneAngle * 2) / segments
 	local yaw = math.atan2(direction.X, direction.Z)
 
-	-- Filled triangle segments
 	for i = 0, segments - 1 do
 		local a1 = -coneAngle + segAngle * i
 		local a2 = -coneAngle + segAngle * (i + 1)
@@ -488,8 +637,7 @@ local function createConeIndicator(position: Vector3, direction: Vector3, coneRa
 	anchor.Parent = Workspace
 
 	task.spawn(function()
-		local holdElapsed = 0
-		while holdElapsed < 0.1 do holdElapsed = holdElapsed + RunService.Heartbeat:Wait() end
+		task.wait(0.1)
 		local fadeTime = 0.35
 		local elapsed = 0
 		local conn
@@ -526,10 +674,7 @@ local function performLeapingSlash(tower: Model, targetPos: Vector3)
 
 	local CONE_RANGE = range * LEAP_SLASH_CONE_RANGE_MULT
 
-	-- Show cone indicator
 	createConeIndicator(slashPos, dir, CONE_RANGE, LEAP_SLASH_CONE_ANGLE)
-
-	-- Slash particles
 	spawnSlashParticles(slashPos, dir)
 
 	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
@@ -574,11 +719,9 @@ local function playLeapAnimation(tower: Model, dest: Vector3, onComplete: () -> 
 	local rhBase = rh and rh.C0
 	local nkBase = nk and nk.C0
 
-	-- Phase 1: WINDUP (tower crouches and raises sword)
 	local WINDUP_TIME = 0.4
 	local windupElapsed = 0
 
-	-- Face target during windup
 	torso.CFrame = CFrame.new(startPos, startPos + dir)
 
 	local stopTrail
@@ -594,7 +737,6 @@ local function playLeapAnimation(tower: Model, dest: Vector3, onComplete: () -> 
 		end
 	end
 
-	-- Windup phase
 	local windupConn
 	windupConn = RunService.Heartbeat:Connect(function(dt)
 		if not torso or not torso.Parent then
@@ -607,7 +749,6 @@ local function playLeapAnimation(tower: Model, dest: Vector3, onComplete: () -> 
 		local t = math.clamp(windupElapsed / WINDUP_TIME, 0, 1)
 		local smooth = t * t * (3 - 2 * t)
 
-		-- Crouch + raise sword
 		if rs and rsBase then rs.C0 = rsBase * CFrame.Angles(-2.8 * smooth, 0, 0.3 * smooth) end
 		if ls and lsBase then ls.C0 = lsBase * CFrame.Angles(-0.3 * smooth, 0, -0.15 * smooth) end
 		if lh and lhBase then lh.C0 = lhBase * CFrame.Angles(0.3 * smooth, 0, 0) * CFrame.new(0, -0.15 * smooth, 0) end
@@ -617,13 +758,11 @@ local function playLeapAnimation(tower: Model, dest: Vector3, onComplete: () -> 
 		if t >= 1 then
 			windupConn:Disconnect()
 
-			-- Phase 2: AIRBORNE
 			stopTrail = spawnLeapTrailParticles(tower)
 
-			-- Recapture start pos (in case tower was still walking)
 			local launchPos = torso.Position
-			local FLIGHT_TIME = LEAP_DURATION - WINDUP_TIME - 0.12 -- reserve time for slowdown
-			local SLOWDOWN_START = 0.75 -- start slowing at 75% of flight
+			local FLIGHT_TIME = LEAP_DURATION - WINDUP_TIME - 0.12
+			local SLOWDOWN_START = 0.75
 			local flightElapsed = 0
 
 			local flightConn
@@ -638,22 +777,18 @@ local function playLeapAnimation(tower: Model, dest: Vector3, onComplete: () -> 
 				flightElapsed = flightElapsed + dt2
 				local rawAlpha = math.clamp(flightElapsed / FLIGHT_TIME, 0, 1)
 
-				-- Slowdown curve: fast start, decelerate near end
 				local alpha
 				if rawAlpha < SLOWDOWN_START then
-					-- Normal speed portion
 					local normalT = rawAlpha / SLOWDOWN_START
 					alpha = normalT * SLOWDOWN_START
 				else
-					-- Slowdown portion: ease out
 					local slowT = (rawAlpha - SLOWDOWN_START) / (1 - SLOWDOWN_START)
-					local easedSlow = 1 - (1 - slowT) * (1 - slowT) -- ease out quad
+					local easedSlow = 1 - (1 - slowT) * (1 - slowT)
 					alpha = SLOWDOWN_START + easedSlow * (1 - SLOWDOWN_START)
 				end
 
 				local smooth2 = alpha * alpha * (3 - 2 * alpha)
 
-				-- Parabolic arc
 				local flatPos = launchPos:Lerp(dest, smooth2)
 				local heightOffset = LEAP_HEIGHT * 4 * alpha * (1 - alpha)
 				local newPos = Vector3.new(flatPos.X, launchPos.Y + heightOffset, flatPos.Z)
@@ -661,15 +796,12 @@ local function playLeapAnimation(tower: Model, dest: Vector3, onComplete: () -> 
 				torso.CFrame = CFrame.new(newPos, newPos + dir)
 				updateCircles(newPos)
 
-				-- Body pose during flight
 				if alpha < 0.5 then
-					-- Rising
 					local rise = alpha * 2
 					local rs2 = rise * rise * (3 - 2 * rise)
 					if lh and lhBase then lh.C0 = lhBase * CFrame.Angles(0.3 + 0.3 * rs2, 0, 0) * CFrame.new(0, -0.15, 0) end
 					if rh and rhBase then rh.C0 = rhBase * CFrame.Angles(0.3 + 0.3 * rs2, 0, 0) * CFrame.new(0, -0.15, 0) end
 				else
-					-- Falling: sword comes down
 					local fall = (alpha - 0.5) * 2
 					local fs = fall * fall * (3 - 2 * fall)
 					local swordAngle = -2.8 + (2.8 + 0.8) * fs
@@ -685,11 +817,9 @@ local function playLeapAnimation(tower: Model, dest: Vector3, onComplete: () -> 
 					flightConn:Disconnect()
 					if stopTrail then stopTrail() end
 
-					-- Reset legs
 					if lh and lh.Parent and lhBase then lh.C0 = lhBase end
 					if rh and rh.Parent and rhBase then rh.C0 = rhBase end
 
-					-- Find slash target
 					local nearestEnemy = findNearestEnemy(torso.Position, tower:GetAttribute("RNG") or 8)
 					local slashTarget
 					if nearestEnemy and nearestEnemy.PrimaryPart then
@@ -700,21 +830,20 @@ local function playLeapAnimation(tower: Model, dest: Vector3, onComplete: () -> 
 
 					performLeapingSlash(tower, slashTarget)
 
-					-- Smooth recovery using Heartbeat for frame-accurate timing
 					task.spawn(function()
+						local recFrames = 8
 						local recTime = 0.25
+						local recDt = recTime / recFrames
 						local rsStart = rs and rs.C0
 						local lsStart = ls and ls.C0
 						local nkStart = nk and nk.C0
-						local recElapsed = 0
-						while recElapsed < recTime do
-							local dt = RunService.Heartbeat:Wait()
-							recElapsed = recElapsed + dt
-							local rt = math.clamp(recElapsed / recTime, 0, 1)
+						for f = 1, recFrames do
+							local rt = f / recFrames
 							rt = rt * rt * (3 - 2 * rt)
 							if rs and rs.Parent and rsBase then rs.C0 = rsStart:Lerp(rsBase, rt) end
 							if ls and ls.Parent and lsBase then ls.C0 = lsStart:Lerp(lsBase, rt) end
 							if nk and nk.Parent and nkBase then nk.C0 = nkStart:Lerp(nkBase, rt) end
+							task.wait(recDt)
 						end
 					end)
 
@@ -724,6 +853,7 @@ local function playLeapAnimation(tower: Model, dest: Vector3, onComplete: () -> 
 		end
 	end)
 end
+
 -- ============================================================
 -- TOWER ATTACK ANIMATION (Cleave) + hit particles
 -- ============================================================
@@ -757,32 +887,29 @@ local function playAttackAnimation(tower: Model, target: Model)
 		local totalTime = 0.35
 		local stepTime = totalTime / STEPS
 
-		-- Keyframes: {rsAngles, lsAngles, nkAngles}
 		local keyframes = {
-			{ CFrame.Angles(-2.2, 0.5, 0.4),   CFrame.Angles(0.4, 0.1, -0.3),   CFrame.Angles(0.1, -0.15, 0) },   -- wind up
-			{ CFrame.Angles(-1.0, 0.2, 0.1),   CFrame.Angles(0.1, 0.05, -0.1),  CFrame.Angles(0.05, -0.05, 0) },  -- mid wind
-			{ CFrame.Angles(0.4, -0.5, -0.6),  CFrame.Angles(-0.3, -0.1, 0.2),  CFrame.Angles(-0.1, 0.1, 0) },    -- swing contact
-			{ CFrame.Angles(0.8, -0.7, -0.8),  CFrame.Angles(-0.4, -0.15, 0.3), CFrame.Angles(-0.15, 0.12, 0) },  -- follow through
-			{ CFrame.Angles(-0.2, 0.1, 0.1),   CFrame.Angles(-0.05, 0, 0.05),   CFrame.Angles(0, 0, 0) },         -- recovery
-			{ CFrame.Angles(0, 0, 0),           CFrame.Angles(0, 0, 0),           CFrame.Angles(0, 0, 0) },         -- idle
+			{ CFrame.Angles(-2.2, 0.5, 0.4),   CFrame.Angles(0.4, 0.1, -0.3),   CFrame.Angles(0.1, -0.15, 0) },
+			{ CFrame.Angles(-1.0, 0.2, 0.1),   CFrame.Angles(0.1, 0.05, -0.1),  CFrame.Angles(0.05, -0.05, 0) },
+			{ CFrame.Angles(0.4, -0.5, -0.6),  CFrame.Angles(-0.3, -0.1, 0.2),  CFrame.Angles(-0.1, 0.1, 0) },
+			{ CFrame.Angles(0.8, -0.7, -0.8),  CFrame.Angles(-0.4, -0.15, 0.3), CFrame.Angles(-0.15, 0.12, 0) },
+			{ CFrame.Angles(-0.2, 0.1, 0.1),   CFrame.Angles(-0.05, 0, 0.05),   CFrame.Angles(0, 0, 0) },
+			{ CFrame.Angles(0, 0, 0),           CFrame.Angles(0, 0, 0),           CFrame.Angles(0, 0, 0) },
 		}
 
 		for i = 1, STEPS do
 			if not rs or not rs.Parent then d.animating = false return end
 
 			local kf = keyframes[i]
-			-- Capture starting offsets for this step
+			local frames = 4
+			local frameDt = stepTime / frames
+
 			local rsCur = rs.C0 * d.rsC0:Inverse()
 			local lsCur = (ls and ls.Parent) and (ls.C0 * d.lsC0:Inverse()) or CFrame.new()
 			local nkCur = (nk and nk.Parent) and (nk.C0 * d.nkC0:Inverse()) or CFrame.new()
 
-			-- Interpolate to keyframe using Heartbeat for frame-accurate timing
-			local elapsed = 0
-			while elapsed < stepTime do
-				local dt = RunService.Heartbeat:Wait()
+			for f = 1, frames do
 				if not rs or not rs.Parent then d.animating = false return end
-				elapsed = elapsed + dt
-				local alpha = math.clamp(elapsed / stepTime, 0, 1)
+				local alpha = f / frames
 				local t = alpha * alpha * (3 - 2 * alpha)
 
 				rs.C0 = d.rsC0 * rsCur:Lerp(kf[1], t)
@@ -792,103 +919,14 @@ local function playAttackAnimation(tower: Model, target: Model)
 				if nk and nk.Parent and d.nkC0 then
 					nk.C0 = d.nkC0 * nkCur:Lerp(kf[3], t)
 				end
+
+				task.wait(frameDt)
 			end
 		end
 
 		if rs and rs.Parent then rs.C0 = d.rsC0 end
 		if ls and ls.Parent then ls.C0 = d.lsC0 end
 		if nk and nk.Parent then nk.C0 = d.nkC0 end
-		d.animating = false
-	end)
-end
-
--- ============================================================
--- ENEMY PUNCH ANIMATION
--- ============================================================
-
-local function playEnemyPunchAnimation(enemy: Model, tower: Model)
-	local torso = enemy.PrimaryPart; if not torso then return end
-	local ls = torso:FindFirstChild("LeftShoulder")
-	local rs = torso:FindFirstChild("RightShoulder")
-	local nk = torso:FindFirstChild("Neck")
-
-	if not enemyAttackAnimData[enemy] then
-		enemyAttackAnimData[enemy] = {
-			lsC0 = ls and ls.C0, rsC0 = rs and rs.C0, nkC0 = nk and nk.C0,
-			animating = false, lastHand = "right"
-		}
-	end
-	local d = enemyAttackAnimData[enemy]
-	if d.animating then return end
-	d.animating = true
-
-	local punchLeft = d.lastHand == "right"
-	d.lastHand = punchLeft and "left" or "right"
-
-	local tp = tower.PrimaryPart and tower.PrimaryPart.Position
-	if tp then
-		local dir = Vector3.new(tp.X - torso.Position.X, 0, tp.Z - torso.Position.Z)
-		if dir.Magnitude > 0.1 then torso.CFrame = CFrame.new(torso.Position, torso.Position + dir.Unit) end
-	end
-
-	local pS = punchLeft and ls or rs
-	local pB = punchLeft and d.lsC0 or d.rsC0
-	local oS = punchLeft and rs or ls
-	local oB = punchLeft and d.rsC0 or d.lsC0
-	local hD = punchLeft and 1 or -1
-
-	if not pS or not pB then d.animating = false return end
-
-	-- Smooth interpolation helper using Heartbeat for frame-accurate timing
-	local function tweenMotor(motor, base, targetOffset, duration)
-		if not motor or not motor.Parent or not base then return end
-		local startOffset = motor.C0 * base:Inverse()
-		local elapsed = 0
-		while elapsed < duration do
-			local dt = RunService.Heartbeat:Wait()
-			if not motor or not motor.Parent then return end
-			elapsed = elapsed + dt
-			local t = math.clamp(elapsed / duration, 0, 1)
-			t = t * t * (3 - 2 * t) -- smoothstep
-			motor.C0 = base * startOffset:Lerp(targetOffset, t)
-		end
-	end
-
-	task.spawn(function()
-		-- Wind up (both arms + head)
-		local windTarget = CFrame.Angles(-1.8, hD * 0.3, hD * 0.2)
-		local offTarget  = CFrame.Angles(-0.5, 0, -hD * 0.3)
-		local nkTarget   = CFrame.Angles(0.1, hD * 0.1, 0)
-
-		-- Parallel tween all joints for wind-up
-		task.spawn(function() tweenMotor(pS, pB, windTarget, 0.1) end)
-		task.spawn(function() tweenMotor(oS, oB, offTarget, 0.1) end)
-		if nk and nk.Parent and d.nkC0 then
-			task.spawn(function() tweenMotor(nk, d.nkC0, nkTarget, 0.1) end)
-		end
-		local waitElapsed = 0
-		while waitElapsed < 0.1 do waitElapsed = waitElapsed + RunService.Heartbeat:Wait() end
-
-		-- Punch forward (fast)
-		if not pS or not pS.Parent then d.animating = false return end
-		local punchTarget = CFrame.Angles(-1.5, -hD * 0.15, -hD * 0.15)
-		tweenMotor(pS, pB, punchTarget, 0.06)
-
-		-- Hold briefly
-		local holdElapsed = 0
-		while holdElapsed < 0.06 do holdElapsed = holdElapsed + RunService.Heartbeat:Wait() end
-
-		-- Retract smoothly
-		if not pS or not pS.Parent then d.animating = false return end
-		tweenMotor(pS, pB, CFrame.Angles(-0.3, 0, 0), 0.08)
-		if oS and oS.Parent and oB then tweenMotor(oS, oB, CFrame.new(), 0.06) end
-		if nk and nk.Parent and d.nkC0 then tweenMotor(nk, d.nkC0, CFrame.new(), 0.06) end
-
-		-- Return to idle
-		local idleElapsed = 0
-		while idleElapsed < 0.04 do idleElapsed = idleElapsed + RunService.Heartbeat:Wait() end
-		if pS and pS.Parent and pB then tweenMotor(pS, pB, CFrame.new(), 0.08) end
-
 		d.animating = false
 	end)
 end
@@ -942,21 +980,19 @@ local function startTowerWalk(m: Model)
 		local cos = math.cos(elapsed)
 		local abs_sin = math.abs(sin)
 
-		-- Smooth step curves for more natural motion
-		local smoothSin = sin * abs_sin  -- soft at extremes
+		local smoothSin = sin * abs_sin
 		local bob = math.abs(math.sin(elapsed * 2)) * 0.15
 		local lean = math.sin(elapsed * 2) * 0.04
 		local sway = sin * 0.02
-		local breathe = math.sin(elapsed * 0.7) * 0.01 -- subtle idle breathe
+		local breathe = math.sin(elapsed * 0.7) * 0.01
 
-		-- Legs with smooth lift curves
 		local lY, lZ, lA
 		if sin > 0 then
 			local t = sin
 			local smoothT = t * t * (3 - 2 * t)
 			lY = smoothT * 0.3
 			lZ = -sin * 0.6
-			lA = -cos * 0.08  -- slight forward tilt during lift
+			lA = -cos * 0.08
 		else
 			local p = -sin
 			local smoothP = p * p * (3 - 2 * p)
@@ -983,7 +1019,6 @@ local function startTowerWalk(m: Model)
 		if lH and lhC0 then lH.C0 = lhC0 * CFrame.new(0, -bob + lY, lZ) * CFrame.Angles(lA, 0, 0) end
 		if rH and rhC0 then rH.C0 = rhC0 * CFrame.new(0, -bob + rY, rZ) * CFrame.Angles(rA, 0, 0) end
 
-		-- Arms with elbow bend
 		local lArmSwing = -sin * 0.4
 		local rArmSwing = sin * 0.4
 		local elbowBend = abs_sin * 0.2
@@ -995,7 +1030,6 @@ local function startTowerWalk(m: Model)
 			rS.C0 = rsC0 * CFrame.Angles(rArmSwing + lean + breathe, 0, -elbowBend + sway)
 		end
 
-		-- Head counter-bob with subtle look
 		if nk and nkC0 then
 			nk.C0 = nkC0 * CFrame.new(0, bob, 0) * CFrame.Angles(-sin * 0.05 - lean, sin * 0.015, -sway)
 		end
@@ -1012,36 +1046,19 @@ end
 -- AGGRO
 -- ============================================================
 
-local enemyWalkBaseC0s = {}
-
-local function storeEnemyBaseC0s(e: Model)
-	if enemyWalkBaseC0s[e] then return end
-	local torso = e.PrimaryPart; if not torso then return end
-	local stored = {}
-	for _, n in ipairs({"Neck", "LeftShoulder", "RightShoulder", "LeftHip", "RightHip"}) do
-		local motor = torso:FindFirstChild(n)
-		if motor then stored[n] = motor.C0 end
-	end
-	enemyWalkBaseC0s[e] = stored
-end
-
-local function restoreEnemyBaseC0s(e: Model)
-	local stored = enemyWalkBaseC0s[e]; if not stored then return end
-	local torso = e.PrimaryPart; if not torso then return end
-	for n, c0 in pairs(stored) do
-		local motor = torso:FindFirstChild(n)
-		if motor then motor.C0 = c0 end
-	end
-end
-
 local function releaseAggro(tower: Model)
 	local enemy = aggroMap[tower]; if not enemy then return end
 	aggroMap[tower] = nil; enemyAggroBy[enemy] = nil
+
+	if activePushes[enemy] then
+		activePushes[enemy]:Disconnect()
+		activePushes[enemy] = nil
+	end
+
 	if enemy and enemy.Parent then
 		enemy:SetAttribute("Aggroed", false)
 		enemy:SetAttribute("AggroTarget", "")
 		enemy:SetAttribute("WalkStopped", false)
-		restoreEnemyBaseC0s(enemy)
 	end
 end
 
@@ -1049,37 +1066,56 @@ local function setAggro(tower: Model, enemy: Model)
 	releaseAggro(tower)
 	if enemyAggroBy[enemy] then return end
 	aggroMap[tower] = enemy; enemyAggroBy[enemy] = tower
-	storeEnemyBaseC0s(enemy)
 	enemy:SetAttribute("Aggroed", true)
 	enemy:SetAttribute("AggroTarget", tower:GetFullName())
 	enemy:SetAttribute("WalkStopped", true)
+
+	startAggroPush(tower, enemy)
 end
 
-local function isEnemyInAggroRange(enemy: Model, tower: Model): boolean
-	local er, tr = enemy.PrimaryPart, tower.PrimaryPart
-	if not er or not tr then return false end
-	local eRange = enemy:GetAttribute("RangeStuds") or enemy:GetAttribute("RNG") or 5
-	return (tr.Position - er.Position).Magnitude <= eRange
-end
-
-local function isTowerInAttackRange(tower: Model, enemy: Model): boolean
-	local torso = tower.PrimaryPart
-	if not torso or not enemy.PrimaryPart then return false end
-	return (enemy.PrimaryPart.Position - torso.Position).Magnitude <= (tower:GetAttribute("RNG") or 8)
-end
+-- ============================================================
+-- ENEMY ATTACK TOWER
+-- ============================================================
 
 local enemyAttackTimers = {}
 
 local function enemyAttackTower(enemy: Model, tower: Model)
 	local now = tick()
 	local last = enemyAttackTimers[enemy] or 0
-	local atkSpdRaw = enemy:GetAttribute("ATK_SPD") or 1
-	local cooldown = type(atkSpdRaw) == "number" and 1 / math.max(atkSpdRaw, 0.1) or 1
+	local atkSpdTier = enemy:GetAttribute("ATK_SPD") or "SLOW"
+
+	local atkSpdLookup = {
+		["VERY SLOW"] = 3.0, ["SLOW"] = 2.0, ["MEDIUM"] = 1.2,
+		["FAST"] = 0.7, ["VERY FAST"] = 0.3,
+	}
+	local cooldown = atkSpdLookup[atkSpdTier] or 1.2
+
 	if now - last < cooldown then return end
 	enemyAttackTimers[enemy] = now
 
-	playEnemyPunchAnimation(enemy, tower)
-	task.delay(0.14, function()
+	-- Face the tower
+	local enemyRoot = enemy.PrimaryPart
+	local towerRoot = tower.PrimaryPart
+	if enemyRoot and towerRoot then
+		local dir = Vector3.new(
+			towerRoot.Position.X - enemyRoot.Position.X,
+			0,
+			towerRoot.Position.Z - enemyRoot.Position.Z
+		)
+		if dir.Magnitude > 0.1 then
+			enemyRoot.CFrame = CFrame.new(enemyRoot.Position, enemyRoot.Position + dir.Unit)
+		end
+	end
+
+	-- Play punch animation via BindableFunction
+	if playEnemyPunchRemote then
+		pcall(function()
+			playEnemyPunchRemote:Invoke(enemy)
+		end)
+	end
+
+	-- Deal damage after a short delay (timed to punch impact)
+	task.delay(0.15, function()
 		if not enemy or not enemy.Parent or not tower or not tower.Parent then return end
 		local atk = enemy:GetAttribute("ATK") or 1
 		local hp = tower:GetAttribute("HP") or 0
@@ -1095,12 +1131,19 @@ local function enemyAttackTower(enemy: Model, tower: Model)
 	end)
 end
 
+-- ============================================================
+-- CLEANUP: enemy removed
+-- ============================================================
+
 enemiesFolder.ChildRemoved:Connect(function(enemy)
 	local tower = enemyAggroBy[enemy]
 	if tower then aggroMap[tower] = nil; enemyAggroBy[enemy] = nil end
 	enemyAttackTimers[enemy] = nil
-	enemyAttackAnimData[enemy] = nil
-	enemyWalkBaseC0s[enemy] = nil
+
+	if activePushes[enemy] then
+		activePushes[enemy]:Disconnect()
+		activePushes[enemy] = nil
+	end
 end)
 
 -- ============================================================
@@ -1137,10 +1180,10 @@ local function updateCirclePositions(tower: Model, pos: Vector3)
 		leapCircle.CFrame = CFrame.new(pos.X, pos.Y - 2.6, pos.Z) * CFrame.Angles(0, 0, math.rad(90))
 	end
 end
+
 local function moveTower(tower: Model, dest: Vector3)
 	local torso = tower.PrimaryPart; if not torso then return end
 
-	-- Cancel any existing movement
 	if activeMovements[tower] then
 		activeMovements[tower]:Disconnect()
 		activeMovements[tower] = nil
@@ -1152,9 +1195,7 @@ local function moveTower(tower: Model, dest: Vector3)
 	local flatDist = (Vector3.new(dest.X, 0, dest.Z) - Vector3.new(startPos.X, 0, startPos.Z)).Magnitude
 	local range = tower:GetAttribute("RNG") or 8
 
-	-- RELENTLESS ADVANCE: if within leap range AND off cooldown, leap
 	if flatDist <= range * LEAP_RANGE_MULT and isLeapSlashReady(tower) then
-		-- Stop walk animation if currently walking
 		stopTowerWalk(tower)
 		tower:SetAttribute("State", "Leaping")
 
@@ -1167,7 +1208,6 @@ local function moveTower(tower: Model, dest: Vector3)
 		return
 	end
 
-	-- Normal walk
 	tower:SetAttribute("State", "Moving")
 	startTowerWalk(tower)
 	moveIndicators[tower] = createMoveIndicator(dest)
@@ -1214,7 +1254,7 @@ local function moveTower(tower: Model, dest: Vector3)
 end
 
 -- ============================================================
--- TOWER AI + SURVIVOR PASSIVE (burst heal)
+-- TOWER AI + SURVIVOR PASSIVE
 -- ============================================================
 
 local activeTowers = {}
@@ -1271,15 +1311,13 @@ RunService.Heartbeat:Connect(function(dt)
 			continue
 		end
 
-		-- Try to aggro: check if the TOWER is within the ENEMY's attack range
-		-- This means the enemy can reach the tower to punch it
+		-- Try to aggro
 		if not curAggro then
 			local torso = tower.PrimaryPart
 			local enemyTorso = target.PrimaryPart
 			if torso and enemyTorso then
 				local dist = (torso.Position - enemyTorso.Position).Magnitude
 				local enemyRange = target:GetAttribute("RangeStuds") or target:GetAttribute("RNG") or 5
-				-- Aggro if the tower is close enough for the enemy to attack
 				if dist <= enemyRange then
 					setAggro(tower, target)
 				end
@@ -1310,8 +1348,7 @@ RunService.Heartbeat:Connect(function(dt)
 		if (enemyHP - damage) <= 0 then target:Destroy() end
 	end
 
-	-- === AGGROED ENEMIES ATTACK TOWERS ===
-	-- Also check ALL enemies near towers for aggro (in case they walked into range)
+	-- === SCAN FOR NEW AGGRO TARGETS ===
 	for tower, data in pairs(activeTowers) do
 		if not tower or not tower.Parent then continue end
 		local towerState = tower:GetAttribute("State") or "Idle"
@@ -1320,15 +1357,13 @@ RunService.Heartbeat:Connect(function(dt)
 		local torso = tower.PrimaryPart
 		if not torso then continue end
 
-		-- If this tower doesn't have an aggro target, scan for nearby enemies
 		if not aggroMap[tower] then
 			for _, enemy in ipairs(enemiesFolder:GetChildren()) do
 				if enemy:IsA("Model") and enemy.PrimaryPart and (enemy:GetAttribute("HP") or 0) > 0 then
-					if not enemyAggroBy[enemy] then -- not already aggroed by another tower
+					if not enemyAggroBy[enemy] then
 						local dist = (torso.Position - enemy.PrimaryPart.Position).Magnitude
 						local enemyRange = enemy:GetAttribute("RangeStuds") or enemy:GetAttribute("RNG") or 5
 						local towerRange = tower:GetAttribute("RNG") or 8
-						-- Enemy must be in tower's attack range AND tower must be in enemy's attack range
 						if dist <= towerRange and dist <= enemyRange then
 							setAggro(tower, enemy)
 							break
@@ -1339,11 +1374,10 @@ RunService.Heartbeat:Connect(function(dt)
 		end
 	end
 
-	-- Aggroed enemies perform their attacks
+	-- === AGGROED ENEMIES ATTACK ===
 	for enemy, tower in pairs(enemyAggroBy) do
 		if not enemy or not enemy.Parent then continue end
 		if not tower or not tower.Parent then
-			-- Tower died, release
 			enemyAggroBy[enemy] = nil
 			if enemy and enemy.Parent then
 				enemy:SetAttribute("Aggroed", false)
@@ -1354,7 +1388,6 @@ RunService.Heartbeat:Connect(function(dt)
 		end
 		if (enemy:GetAttribute("HP") or 0) <= 0 then continue end
 
-		-- Check if enemy is still in range to attack
 		local enemyTorso = enemy.PrimaryPart
 		local towerTorso = tower.PrimaryPart
 		if enemyTorso and towerTorso then
@@ -1362,7 +1395,6 @@ RunService.Heartbeat:Connect(function(dt)
 			local enemyRange = enemy:GetAttribute("RangeStuds") or enemy:GetAttribute("RNG") or 5
 
 			if dist <= enemyRange then
-				-- Face the tower
 				local dir = Vector3.new(
 					towerTorso.Position.X - enemyTorso.Position.X,
 					0,
@@ -1374,12 +1406,12 @@ RunService.Heartbeat:Connect(function(dt)
 
 				enemyAttackTower(enemy, tower)
 			else
-				-- Out of range, release aggro
 				releaseAggro(tower)
 			end
 		end
 	end
 end)
+
 -- ============================================================
 -- ON PLACEMENT: Leaping Slash toward nearest enemy
 -- ============================================================
@@ -1418,8 +1450,6 @@ moveRemote.OnServerEvent:Connect(function(player, tower, dest)
 	if (tower:GetAttribute("Owner") or "") ~= player.Name then return end
 
 	local state = tower:GetAttribute("State") or "Idle"
-	-- Allow move command while Moving (to redirect or leap mid-walk)
-	-- Block only during Leaping (already in a leap)
 	if state == "Leaping" then return end
 
 	moveTower(tower, dest)

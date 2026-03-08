@@ -1,139 +1,226 @@
 --[[
 	EnemyManager (Server Script)
 	
-	Simple blocky enemy: head, torso, 2 arms, 2 legs.
-	6 parts total. Procedural walk animation.
+	Clones a pre-built enemy model from ServerStorage and
+	plays its walk animation. Replaces the legacy procedural version.
 ]]
 
+local ServerStorage    = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace         = game:GetService("Workspace")
-local RunService        = game:GetService("RunService")
+local Workspace        = game:GetService("Workspace")
 
 local EnemyStats        = require(ReplicatedStorage:WaitForChild("EnemyStats", 10))
 local PathfindingModule = require(ReplicatedStorage:WaitForChild("PathfindingModule", 10))
 
-if not EnemyStats then
-	error("[EnemyManager] Could not find EnemyStats in ReplicatedStorage!")
-end
-if not PathfindingModule then
-	error("[EnemyManager] Could not find PathfindingModule in ReplicatedStorage!")
-end
+if not EnemyStats then error("[EnemyManager] Could not find EnemyStats!") end
+if not PathfindingModule then error("[EnemyManager] Could not find PathfindingModule!") end
 
 print("[EnemyManager] Modules loaded!")
 
+-- Workspace references (same as before)
 local pathFolder    = Workspace:WaitForChild("Path", 10)
 local enemiesFolder = Workspace:WaitForChild("Enemies", 10)
 local spawnPart     = Workspace:WaitForChild("EnemySpawn", 10)
 local basePart      = Workspace:WaitForChild("Base", 10)
 
-if not pathFolder then error("[EnemyManager] Missing 'Path' folder in Workspace!") end
-if not enemiesFolder then error("[EnemyManager] Missing 'Enemies' folder in Workspace!") end
-if not spawnPart then error("[EnemyManager] Missing 'EnemySpawn' part in Workspace!") end
-if not basePart then error("[EnemyManager] Missing 'Base' part in Workspace!") end
+if not pathFolder then error("[EnemyManager] Missing 'Path' folder!") end
+if not enemiesFolder then error("[EnemyManager] Missing 'Enemies' folder!") end
+if not spawnPart then error("[EnemyManager] Missing 'EnemySpawn' part!") end
+if not basePart then error("[EnemyManager] Missing 'Base' part!") end
+
+-- Model templates folder in ServerStorage
+local modelTemplates = ServerStorage:WaitForChild("EnemyModels", 10)
+if not modelTemplates then error("[EnemyManager] Missing 'EnemyModels' folder in ServerStorage!") end
 
 local waypoints = PathfindingModule.BuildWaypoints(pathFolder)
 print("[EnemyManager] Found " .. #waypoints .. " waypoints.")
+if #waypoints == 0 then error("[EnemyManager] No waypoints found!") end
 
-if #waypoints == 0 then
-	error("[EnemyManager] No waypoints found!")
+-- ============================================================
+-- ANIMATION HELPERS
+-- ============================================================
+
+local walkTracks = {}  -- enemyModel -> AnimationTrack
+local punchTracks = {} -- enemyModel -> AnimationTrack
+
+local function getOrCreateAnimator(enemyModel: Model): Animator?
+	local humanoid = enemyModel:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		warn("[EnemyManager] No Humanoid in enemy model, can't animate")
+		return nil
+	end
+
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = humanoid
+	end
+	return animator
+end
+
+local function startWalkAnimation(enemyModel: Model)
+	local animator = getOrCreateAnimator(enemyModel)
+	if not animator then return end
+
+	local walkAnimObj = enemyModel:FindFirstChild("WalkAnim")
+		or enemyModel:FindFirstChildOfClass("Humanoid"):FindFirstChild("WalkAnim")
+	if not walkAnimObj then
+		warn("[EnemyManager] No 'WalkAnim' Animation found in model")
+		return
+	end
+
+	local track = animator:LoadAnimation(walkAnimObj)
+	track.Looped = true
+	track.Priority = Enum.AnimationPriority.Movement
+	track:Play()
+	walkTracks[enemyModel] = track
+
+	-- Pre-load the punch animation
+	local punchAnimObj = enemyModel:FindFirstChild("PunchAnim")
+		or enemyModel:FindFirstChildOfClass("Humanoid"):FindFirstChild("PunchAnim")
+	if punchAnimObj then
+		local punchTrack = animator:LoadAnimation(punchAnimObj)
+		punchTrack.Looped = false
+		punchTrack.Priority = Enum.AnimationPriority.Action
+
+		-- Scale animation speed to match attack speed
+		local atkSpdTier = enemyModel:GetAttribute("ATK_SPD") or "SLOW"
+		local atkSpdLookup = {
+			["VERY SLOW"]  = 0.8,
+			["SLOW"]       = 1.0,
+			["MEDIUM"]     = 1.5,
+			["FAST"]       = 2.5,
+			["VERY FAST"]  = 4.0,
+		}
+		local animSpeed = atkSpdLookup[atkSpdTier] or 1.0
+		punchTrack:AdjustSpeed(animSpeed)
+
+		punchTracks[enemyModel] = punchTrack
+	end
+
+	-- Handle walk stop/start AND hold punch frame 0 when aggroed
+	enemyModel:GetAttributeChangedSignal("WalkStopped"):Connect(function()
+		local stopped = enemyModel:GetAttribute("WalkStopped")
+		local punchTrack = punchTracks[enemyModel]
+
+		if stopped then
+			-- Stop walking
+			track:Stop(0.2)
+
+			-- Hold at first frame of punch animation (combat stance)
+			if punchTrack then
+				punchTrack:Play(0.2)
+				punchTrack:AdjustSpeed(0) -- freeze at frame 0
+				punchTrack.TimePosition = 0
+			end
+		else
+			-- Resume walking
+			track:Play(0.2)
+
+			-- Stop the punch pose
+			if punchTrack then
+				punchTrack:Stop(0.2)
+			end
+		end
+	end)
+end
+
+local function stopWalkAnimation(enemyModel: Model)
+	local track = walkTracks[enemyModel]
+	if track then
+		track:Stop(0.15)
+		track:Destroy()
+		walkTracks[enemyModel] = nil
+	end
+	local punchTrack = punchTracks[enemyModel]
+	if punchTrack then
+		punchTrack:Stop()
+		punchTrack:Destroy()
+		punchTracks[enemyModel] = nil
+	end
+end
+
+local function playPunchAnimation(enemyModel: Model)
+	local track = punchTracks[enemyModel]
+	if not track then return end
+
+	-- Unpause and play from the beginning
+	track.TimePosition = 0
+	track:AdjustSpeed(1)
+	track:Play(0.05) -- snappy fade-in since we're already in the pose
+
+	-- When the punch finishes, freeze back at frame 0
+	local conn
+	conn = track.Stopped:Connect(function()
+		conn:Disconnect()
+		-- Only re-freeze if still aggroed
+		if enemyModel:GetAttribute("WalkStopped") then
+			track:Play(0)
+			track:AdjustSpeed(0)
+			track.TimePosition = 0
+		end
+	end)
 end
 
 -- ============================================================
--- HELPER
+-- EXPOSE PUNCH ANIMATION FOR TOWERMANAGER
 -- ============================================================
 
-local function makePart(name, size, color, parent)
-	local part = Instance.new("Part")
-	part.Name = name
-	part.Size = size
-	part.Color = color
-	part.Anchored = false
-	part.CanCollide = false
-	part.Material = Enum.Material.SmoothPlastic
-	part.TopSurface = Enum.SurfaceType.Smooth
-	part.BottomSurface = Enum.SurfaceType.Smooth
-	part.Parent = parent
-	return part
-end
+local punchBindable = Instance.new("BindableFunction")
+punchBindable.Name = "PlayEnemyPunch"
+punchBindable.Parent = ReplicatedStorage
 
-local function makeMotor(name, part0, part1, c0, c1)
-	local motor = Instance.new("Motor6D")
-	motor.Name = name
-	motor.Part0 = part0
-	motor.Part1 = part1
-	motor.C0 = c0
-	motor.C1 = c1 or CFrame.new()
-	motor.Parent = part0
-	return motor
+punchBindable.OnInvoke = function(enemyModel: Model)
+	playPunchAnimation(enemyModel)
 end
 
 -- ============================================================
--- CREATE ENEMY MODEL
--- 6 parts: Torso, Head, LeftArm, RightArm, LeftLeg, RightLeg
+-- CREATE ENEMY MODEL (clone from ServerStorage)
 -- ============================================================
 
 local function createEnemyModel(templateName: string): Model
-	local template = EnemyStats.Templates[templateName]
-	if not template then
+	local stats = EnemyStats.Templates[templateName]
+	if not stats then
 		warn("[EnemyManager] Unknown template: " .. templateName)
 		return nil
 	end
 
-	local model = Instance.new("Model")
+	-- Find the model template in ServerStorage.EnemyModels
+	local modelTemplate = modelTemplates:FindFirstChild(templateName)
+	if not modelTemplate then
+		warn("[EnemyManager] No model named '" .. templateName .. "' in ServerStorage.EnemyModels!")
+		return nil
+	end
+
+	-- Clone the model
+	local model = modelTemplate:Clone()
 	model.Name = templateName
 
-	-- Torso (root)
-	local torso = makePart("HumanoidRootPart", Vector3.new(2, 2.4, 1.2), Color3.fromRGB(150, 150, 150), model)
-	model.PrimaryPart = torso
+	-- Verify PrimaryPart
+	if not model.PrimaryPart then
+		local hrp = model:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			model.PrimaryPart = hrp
+		else
+			warn("[EnemyManager] Model has no HumanoidRootPart or PrimaryPart set!")
+			model:Destroy()
+			return nil
+		end
+	end
 
-	-- Head
-	local head = makePart("Head", Vector3.new(1.4, 1.4, 1.4), Color3.fromRGB(200, 200, 200), model)
-	makeMotor("Neck", torso, head,
-		CFrame.new(0, 1.2, 0),
-		CFrame.new(0, -0.7, 0)
-	)
+	-- Apply stats as attributes (same as legacy)
+	model:SetAttribute("ATK", stats.ATK)
+	model:SetAttribute("ATK_SPD", stats.ATK_SPD)
+	model:SetAttribute("MOVE_SPD", stats.MOVE_SPD)
+	model:SetAttribute("HP", stats.HP)
+	model:SetAttribute("MaxHP", stats.HP)
+	model:SetAttribute("RNG", stats.RNG)
+	model:SetAttribute("TARGETING", stats.TARGETING)
 
-	-- Left Arm
-	local leftArm = makePart("LeftArm", Vector3.new(0.8, 2.4, 1), Color3.fromRGB(170, 170, 170), model)
-	makeMotor("LeftShoulder", torso, leftArm,
-		CFrame.new(-1.4, 0.8, 0),
-		CFrame.new(0, 1.0, 0)
-	)
-
-	-- Right Arm
-	local rightArm = makePart("RightArm", Vector3.new(0.8, 2.4, 1), Color3.fromRGB(170, 170, 170), model)
-	makeMotor("RightShoulder", torso, rightArm,
-		CFrame.new(1.4, 0.8, 0),
-		CFrame.new(0, 1.0, 0)
-	)
-
-	-- Left Leg
-	local leftLeg = makePart("LeftLeg", Vector3.new(0.9, 2.4, 1), Color3.fromRGB(140, 140, 140), model)
-	makeMotor("LeftHip", torso, leftLeg,
-		CFrame.new(-0.5, -1.2, 0),
-		CFrame.new(0, 1.2, 0)
-	)
-
-	-- Right Leg
-	local rightLeg = makePart("RightLeg", Vector3.new(0.9, 2.4, 1), Color3.fromRGB(140, 140, 140), model)
-	makeMotor("RightHip", torso, rightLeg,
-		CFrame.new(0.5, -1.2, 0),
-		CFrame.new(0, 1.2, 0)
-	)
-
-	-- Stats
-	model:SetAttribute("ATK", template.ATK)
-	model:SetAttribute("ATK_SPD", template.ATK_SPD)
-	model:SetAttribute("MOVE_SPD", template.MOVE_SPD)
-	model:SetAttribute("HP", template.HP)
-	model:SetAttribute("MaxHP", template.HP)
-	model:SetAttribute("RNG", template.RNG)
-	model:SetAttribute("TARGETING", template.TARGETING)
-
-	local rangeStuds = EnemyStats.ResolveRng(template.RNG)
+	local rangeStuds = EnemyStats.ResolveRng(stats.RNG)
 	model:SetAttribute("RangeStuds", rangeStuds)
 
-	-- Range circle
+	-- Range circle (same as legacy)
 	local circle = Instance.new("Part")
 	circle.Name = "RangeCircle"
 	circle.Shape = Enum.PartType.Cylinder
@@ -148,158 +235,8 @@ local function createEnemyModel(templateName: string): Model
 	return model
 end
 
--- ============================================================
--- WALK ANIMATION
--- ============================================================
 
-local walkConnections = {}
-
--- Find the startWalkAnimation function and replace it with this version
--- that checks for the WalkStopped attribute:
-
-local function startWalkAnimation(enemyModel: Model)
-	local torso = enemyModel.PrimaryPart
-	if not torso then return end
-
-	local neck          = torso:FindFirstChild("Neck")
-	local leftShoulder  = torso:FindFirstChild("LeftShoulder")
-	local rightShoulder = torso:FindFirstChild("RightShoulder")
-	local leftHip       = torso:FindFirstChild("LeftHip")
-	local rightHip      = torso:FindFirstChild("RightHip")
-
-	local nkC0 = neck and neck.C0
-	local lsC0 = leftShoulder and leftShoulder.C0
-	local rsC0 = rightShoulder and rightShoulder.C0
-	local lhC0 = leftHip and leftHip.C0
-	local rhC0 = rightHip and rightHip.C0
-
-	local elapsed = math.random() * math.pi * 2
-	local wasWalking = true
-	local stopBlend = 1
-
-	local CYCLE_SPEED      = 5.5
-	local LEG_STRIDE       = 0.6
-	local STEP_HEIGHT      = 0.3
-	local PUSH_TILT        = 0.5
-	local ARM_SWING        = 0.4
-	local ARM_BEND         = 0.2
-	local BODY_BOB         = 0.15
-	local HEAD_COUNTER     = 0.05
-	local STOP_BLEND_SPEED = 12  -- blend to idle in ~0.083s when walk stops
-
-	local connection = RunService.Heartbeat:Connect(function(dt)
-		if not torso or not torso.Parent then return end
-
-		local stopped = enemyModel:GetAttribute("WalkStopped")
-		if stopped then
-			if wasWalking then
-				wasWalking = false
-				stopBlend = 0
-			end
-			if stopBlend < 1 then
-				stopBlend = math.min(stopBlend + dt * STOP_BLEND_SPEED, 1)
-				local b = stopBlend * stopBlend * (3 - 2 * stopBlend)
-				if leftHip and lhC0 then leftHip.C0 = leftHip.C0:Lerp(lhC0, b) end
-				if rightHip and rhC0 then rightHip.C0 = rightHip.C0:Lerp(rhC0, b) end
-				if leftShoulder and lsC0 then leftShoulder.C0 = leftShoulder.C0:Lerp(lsC0, b) end
-				if rightShoulder and rsC0 then rightShoulder.C0 = rightShoulder.C0:Lerp(rsC0, b) end
-				if neck and nkC0 then neck.C0 = neck.C0:Lerp(nkC0, b) end
-			end
-			return
-		end
-
-		wasWalking = true
-		stopBlend = 1
-		elapsed = elapsed + dt * CYCLE_SPEED
-		local sin = math.sin(elapsed)
-		local cos = math.cos(elapsed)
-		local abs_sin = math.abs(sin)
-
-		local smoothSin = sin * abs_sin
-		local torsoBob = math.abs(math.sin(elapsed * 2)) * BODY_BOB
-		local torsoLean = math.sin(elapsed * 2) * 0.04
-		local torsoSway = sin * 0.02
-		local breathe = math.sin(elapsed * 0.6) * 0.008
-
-		-- Left leg with smooth lift
-		local leftY, leftZ, leftAngle
-		if sin > 0 then
-			local t = sin
-			local st = t * t * (3 - 2 * t)
-			leftY = st * STEP_HEIGHT
-			leftZ = -sin * LEG_STRIDE
-			leftAngle = -cos * 0.06
-		else
-			local pushProgress = -sin
-			local sp = pushProgress * pushProgress * (3 - 2 * pushProgress)
-			local endLift = (1 - sp) * sp * STEP_HEIGHT
-			leftY = endLift
-			leftZ = -sin * LEG_STRIDE
-			leftAngle = sin * PUSH_TILT
-		end
-
-		-- Right leg with smooth lift
-		local rightY, rightZ, rightAngle
-		if sin < 0 then
-			local t = -sin
-			local st = t * t * (3 - 2 * t)
-			rightY = st * STEP_HEIGHT
-			rightZ = sin * LEG_STRIDE
-			rightAngle = cos * 0.06
-		else
-			local pushProgress = sin
-			local sp = pushProgress * pushProgress * (3 - 2 * pushProgress)
-			local endLift = (1 - sp) * sp * STEP_HEIGHT
-			rightY = endLift
-			rightZ = sin * LEG_STRIDE
-			rightAngle = -sin * PUSH_TILT
-		end
-
-		if leftHip and lhC0 then
-			leftHip.C0 = lhC0
-				* CFrame.new(0, -torsoBob + leftY, leftZ)
-				* CFrame.Angles(leftAngle, 0, 0)
-		end
-		if rightHip and rhC0 then
-			rightHip.C0 = rhC0
-				* CFrame.new(0, -torsoBob + rightY, rightZ)
-				* CFrame.Angles(rightAngle, 0, 0)
-		end
-
-		local leftArmSwing  = -sin * ARM_SWING
-		local rightArmSwing = sin * ARM_SWING
-		local armBendAmount = abs_sin * ARM_BEND
-
-		if leftShoulder and lsC0 then
-			leftShoulder.C0 = lsC0
-				* CFrame.Angles(leftArmSwing + torsoLean + breathe, 0, armBendAmount + torsoSway)
-		end
-		if rightShoulder and rsC0 then
-			rightShoulder.C0 = rsC0
-				* CFrame.Angles(rightArmSwing + torsoLean + breathe, 0, -armBendAmount + torsoSway)
-		end
-
-		if neck and nkC0 then
-			neck.C0 = nkC0
-				* CFrame.new(0, torsoBob, 0)
-				* CFrame.Angles(-sin * HEAD_COUNTER - torsoLean, sin * 0.015, -torsoSway)
-		end
-	end)
-
-	walkConnections[enemyModel] = connection
-end
-
-local function stopWalkAnimation(enemyModel: Model)
-	local conn = walkConnections[enemyModel]
-	if conn then
-		conn:Disconnect()
-		walkConnections[enemyModel] = nil
-	end
-end
-
--- ============================================================
 -- SPAWN ENEMY
--- ============================================================
 
 local activeEnemies = {}
 
@@ -307,22 +244,22 @@ local function spawnEnemy(templateName: string)
 	local model = createEnemyModel(templateName)
 	if not model then return end
 
-	local torso = model.PrimaryPart
-	local spawnPos = spawnPart.Position + Vector3.new(0, 4, 0)
+	local root = model.PrimaryPart
+	local spawnPos = spawnPart.Position + Vector3.new(0, 3.3, 0)
 
-	torso.Anchored = true
+	root.Anchored = true
 	model:PivotTo(CFrame.new(spawnPos))
 	model.Parent = enemiesFolder
 
 	local circle = model:FindFirstChild("RangeCircle")
-	torso:GetPropertyChangedSignal("CFrame"):Connect(function()
+	root:GetPropertyChangedSignal("CFrame"):Connect(function()
 		if circle and circle.Parent then
-			local pos = torso.Position
+			local pos = root.Position
 			circle.CFrame = CFrame.new(pos.X, pos.Y - 2.5, pos.Z) * CFrame.Angles(0, 0, math.rad(90))
 		end
 	end)
 
-	startWalkAnimation(model)
+	startWalkAnimation(model) --MAKE TS WORK LATER
 
 	local moveTier = model:GetAttribute("MOVE_SPD")
 	local moveSpeed = EnemyStats.ResolveMoveSpd(moveTier)
@@ -357,6 +294,10 @@ local function spawnWave(templateName: string, count: number, delayBetween: numb
 		end
 	end)
 end
+
+-- ============================================================
+-- GO!
+-- ============================================================
 
 print("[EnemyManager] Starting in 3 seconds...")
 task.wait(3)
