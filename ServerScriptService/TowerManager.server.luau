@@ -4,6 +4,7 @@
 
 	Coordinates tower placement, targeting, combat AI, aggro, and movement.
 	  - Warrior-specific logic is delegated to Towers/Warrior.luau
+	  - Deadeye-specific logic is delegated to Towers/Deadeye.luau
 	  - Enemy attack behaviour is delegated to Enemies/BasicZombie.luau
 ]]
 
@@ -16,18 +17,17 @@ local PathfindingModule = require(ReplicatedStorage:WaitForChild("PathfindingMod
 
 if not TowerStats then error("[TowerManager] Could not find TowerStats!") end
 
--- Tower modules (one per tower type)
-local Warrior  = require(script.Parent:WaitForChild("Towers"):WaitForChild("Warrior",  10))
-local Deadeye  = require(script.Parent:WaitForChild("Towers"):WaitForChild("Deadeye",  10))
+-- Tower modules
+local Warrior     = require(script.Parent:WaitForChild("Towers"):WaitForChild("Warrior",  10))
+local Deadeye     = require(script.Parent:WaitForChild("Towers"):WaitForChild("Deadeye",  10))
 
--- Enemy modules (needed to drive enemy-side attack behaviour from the AI loop)
+-- Enemy modules
 local BasicZombie = require(script.Parent:WaitForChild("Enemies"):WaitForChild("BasicZombie", 10))
 
 -- ============================================================
 -- TOWER-MODULE ROUTER
 -- ============================================================
 
--- Returns the module that owns this tower (Warrior or Deadeye).
 local function getTowerModule(tower: Model)
 	if tower:GetAttribute("TowerType") == "Deadeye" then
 		return Deadeye
@@ -45,7 +45,7 @@ end
 
 local enemiesFolder = Workspace:WaitForChild("Enemies", 15)
 
--- Remote events (listened to by TowerPlacement client script)
+-- Remotes
 local placeRemote       = Instance.new("RemoteEvent")
 placeRemote.Name        = "PlaceTower"
 placeRemote.Parent      = ReplicatedStorage
@@ -54,10 +54,8 @@ local moveRemote        = Instance.new("RemoteEvent")
 moveRemote.Name         = "MoveTower"
 moveRemote.Parent       = ReplicatedStorage
 
--- Punch bindable created by EnemyManager – wait for it to appear
 local playEnemyPunchRemote = ReplicatedStorage:WaitForChild("PlayEnemyPunch", 10)
 
--- Cached waypoints for the push-direction helper
 local pathFolder      = Workspace:WaitForChild("Path", 10)
 local cachedWaypoints = pathFolder and PathfindingModule.BuildWaypoints(pathFolder) or {}
 
@@ -70,13 +68,13 @@ local enemyAggroBy = {}  -- enemy  -> tower
 local activePushes = {}  -- enemy  -> RBXScriptConnection
 
 -- ============================================================
--- PATH HELPERS  (used by the aggro push to find path direction)
+-- PATH HELPERS
 -- ============================================================
 
 local function closestPointOnSegment(A: Vector3, B: Vector3, P: Vector3): Vector3
-	local AB     = B - A
-	local AP     = P - A
-	local lenSq  = AB.X * AB.X + AB.Z * AB.Z
+	local AB    = B - A
+	local AP    = P - A
+	local lenSq = AB.X * AB.X + AB.Z * AB.Z
 	if lenSq < 0.001 then return A end
 	local t = math.clamp((AP.X * AB.X + AP.Z * AB.Z) / lenSq, 0, 1)
 	return Vector3.new(A.X + AB.X * t, 0, A.Z + AB.Z * t)
@@ -86,7 +84,7 @@ local function getPathDirection(flatPos: Vector3): Vector3
 	local bestDist = math.huge
 	local bestDir  = Vector3.new(1, 0, 0)
 	for i = 1, #cachedWaypoints - 1 do
-		local flatA = Vector3.new(cachedWaypoints[i].X,     0, cachedWaypoints[i].Z)
+		local flatA = Vector3.new(cachedWaypoints[i].X,   0, cachedWaypoints[i].Z)
 		local flatB = Vector3.new(cachedWaypoints[i+1].X, 0, cachedWaypoints[i+1].Z)
 		local pt    = closestPointOnSegment(flatA, flatB, flatPos)
 		local dist  = (pt - flatPos).Magnitude
@@ -100,7 +98,7 @@ local function getPathDirection(flatPos: Vector3): Vector3
 end
 
 -- ============================================================
--- BODY RADIUS  (used to keep push gap correct)
+-- BODY RADIUS
 -- ============================================================
 
 local function getBodyRadius(model: Model): number
@@ -131,8 +129,8 @@ end
 local function startAggroPush(tower: Model, enemy: Model)
 	if activePushes[enemy] then return end
 
-	local PUSH_SPEED  = 8
-	local minDist     = getBodyRadius(enemy) + getBodyRadius(tower) + 0.3
+	local PUSH_SPEED = 8
+	local minDist    = getBodyRadius(enemy) + getBodyRadius(tower) + 0.3
 
 	local conn
 	conn = RunService.Heartbeat:Connect(function(dt)
@@ -147,11 +145,11 @@ local function startAggroPush(tower: Model, enemy: Model)
 		local tr = tower.PrimaryPart
 		if not er or not tr then conn:Disconnect(); activePushes[enemy] = nil; return end
 
-		local ep        = er.Position
-		local tp        = tr.Position
-		local flatE     = Vector3.new(ep.X, 0, ep.Z)
-		local flatT     = Vector3.new(tp.X, 0, tp.Z)
-		local curDist   = (flatE - flatT).Magnitude
+		local ep      = er.Position
+		local tp      = tr.Position
+		local flatE   = Vector3.new(ep.X, 0, ep.Z)
+		local flatT   = Vector3.new(tp.X, 0, tp.Z)
+		local curDist = (flatE - flatT).Magnitude
 
 		if curDist >= minDist then conn:Disconnect(); activePushes[enemy] = nil; return end
 
@@ -160,10 +158,9 @@ local function startAggroPush(tower: Model, enemy: Model)
 		if awayFromTower.Magnitude < 0.01 then awayFromTower = pathDir end
 
 		local pushDir = (pathDir:Dot(awayFromTower) >= 0) and pathDir or -pathDir
-
-		local step   = math.min(PUSH_SPEED * dt, minDist - curDist)
-		local nudge  = pushDir * step
-		local newPos = Vector3.new(ep.X + nudge.X, ep.Y, ep.Z + nudge.Z)
+		local step    = math.min(PUSH_SPEED * dt, minDist - curDist)
+		local nudge   = pushDir * step
+		local newPos  = Vector3.new(ep.X + nudge.X, ep.Y, ep.Z + nudge.Z)
 
 		er.CFrame = CFrame.new(newPos, Vector3.new(tp.X, newPos.Y, tp.Z))
 	end)
@@ -171,7 +168,7 @@ local function startAggroPush(tower: Model, enemy: Model)
 end
 
 -- ============================================================
--- AGGRO  (mutual tower ↔ enemy link)
+-- AGGRO
 -- ============================================================
 
 local function releaseAggro(tower: Model)
@@ -195,7 +192,7 @@ end
 
 local function setAggro(tower: Model, enemy: Model)
 	releaseAggro(tower)
-	if enemyAggroBy[enemy] then return end  -- enemy already engaged elsewhere
+	if enemyAggroBy[enemy] then return end
 
 	aggroMap[tower]     = enemy
 	enemyAggroBy[enemy] = tower
@@ -212,7 +209,7 @@ end
 -- ============================================================
 
 local function findNearestEnemy(pos: Vector3, range: number, searchFolder: Folder?): Model?
-	local folder    = searchFolder or enemiesFolder
+	local folder         = searchFolder or enemiesFolder
 	local best, bestDist = nil, math.huge
 	for _, e in ipairs(folder:GetChildren()) do
 		if e:IsA("Model") and e.PrimaryPart and (e:GetAttribute("HP") or 0) > 0 then
@@ -229,7 +226,6 @@ local function findTarget(tower: Model): Model?
 	local range = tower:GetAttribute("RNG") or 8
 	local pos   = torso.Position
 
-	-- Prioritise current aggro target if still valid
 	local aggroed = aggroMap[tower]
 	if aggroed and aggroed.Parent and aggroed.PrimaryPart then
 		if (aggroed:GetAttribute("HP") or 0) > 0
@@ -248,6 +244,34 @@ local function isTowerInAttackRange(tower: Model, enemy: Model): boolean
 	return (enemy.PrimaryPart.Position - torso.Position).Magnitude
 		<= (tower:GetAttribute("RNG") or 8)
 end
+
+-- ============================================================
+-- HEADHUNTER TARGET HELPER
+-- Finds the highest-MaxHP enemy in range (mirrors Deadeye.DoAttack logic).
+-- ============================================================
+
+local function findHeadhunterTarget(tower: Model, fallback: Model): Model
+	local torso = tower.PrimaryPart
+	if not torso then return fallback end
+	local range   = tower:GetAttribute("RNG") or 22
+	local best    = fallback
+	local bestMax = -math.huge
+	for _, e in ipairs(enemiesFolder:GetChildren()) do
+		if e:IsA("Model") and e.PrimaryPart and (e:GetAttribute("HP") or 0) > 0 then
+			local d  = (e.PrimaryPart.Position - torso.Position).Magnitude
+			local mx = e:GetAttribute("MaxHP") or e:GetAttribute("HP") or 0
+			if d <= range and mx > bestMax then
+				bestMax = mx
+				best    = e
+			end
+		end
+	end
+	return best
+end
+
+-- Per-tower locked Headhunter aim target.
+-- Cleared as soon as the shot fires or the tower loses its target.
+local hhLockedTarget = {}   -- tower -> Model
 
 -- ============================================================
 -- CIRCLE POSITION HELPER
@@ -272,17 +296,17 @@ local activeMovements = {}  -- tower -> RBXScriptConnection
 local moveIndicators  = {}  -- tower -> Part
 
 local function createMoveIndicator(dest: Vector3): Part
-	local ind       = Instance.new("Part")
-	ind.Name        = "MoveIndicator"
-	ind.Shape       = Enum.PartType.Cylinder
-	ind.Size        = Vector3.new(0.1, 3, 3)
-	ind.Color       = Color3.fromRGB(80, 180, 255)
-	ind.Material    = Enum.Material.Neon
+	local ind        = Instance.new("Part")
+	ind.Name         = "MoveIndicator"
+	ind.Shape        = Enum.PartType.Cylinder
+	ind.Size         = Vector3.new(0.1, 3, 3)
+	ind.Color        = Color3.fromRGB(80, 180, 255)
+	ind.Material     = Enum.Material.Neon
 	ind.Transparency = 0.4
-	ind.Anchored    = true
-	ind.CanCollide  = false
-	ind.CFrame      = CFrame.new(dest.X, dest.Y - 3.3, dest.Z) * CFrame.Angles(0, 0, math.rad(90))
-	ind.Parent      = Workspace
+	ind.Anchored     = true
+	ind.CanCollide   = false
+	ind.CFrame       = CFrame.new(dest.X, dest.Y - 3.3, dest.Z) * CFrame.Angles(0, 0, math.rad(90))
+	ind.Parent       = Workspace
 	return ind
 end
 
@@ -303,12 +327,14 @@ local function moveTower(tower: Model, dest: Vector3)
 	destroyMoveIndicator(tower)
 	releaseAggro(tower)
 
-	local startPos = torso.Position
-	local range    = tower:GetAttribute("RNG") or 8
-	local flatDist = (Vector3.new(dest.X, 0, dest.Z) - Vector3.new(startPos.X, 0, startPos.Z)).Magnitude
+	-- Clear any locked HH target when the tower moves
+	hhLockedTarget[tower] = nil
 
-	-- Relentless Advance: Warrior-only leap when within leap range and off cooldown
+	local startPos  = torso.Position
+	local range     = tower:GetAttribute("RNG") or 8
+	local flatDist  = (Vector3.new(dest.X, 0, dest.Z) - Vector3.new(startPos.X, 0, startPos.Z)).Magnitude
 	local towerType = tower:GetAttribute("TowerType") or "Warrior"
+
 	if towerType == "Warrior"
 		and flatDist <= range * Warrior.LEAP_RANGE_MULT
 		and Warrior.IsLeapSlashReady(tower)
@@ -325,8 +351,6 @@ local function moveTower(tower: Model, dest: Vector3)
 	end
 
 	local mod = getTowerModule(tower)
-
-	-- Normal walk
 	tower:SetAttribute("State", "Moving")
 	mod.StartWalk(tower)
 	moveIndicators[tower] = createMoveIndicator(dest)
@@ -368,17 +392,14 @@ local function moveTower(tower: Model, dest: Vector3)
 end
 
 -- ============================================================
--- ON PLACEMENT: trigger Leaping Slash toward nearest enemy
+-- ON PLACEMENT
 -- ============================================================
 
 local function onTowerPlaced(tower: Model)
-	-- Warrior-only: leap toward the nearest enemy on placement
 	if (tower:GetAttribute("TowerType") or "Warrior") ~= "Warrior" then return end
-
 	local torso = tower.PrimaryPart
 	if not torso then return end
 	local range   = tower:GetAttribute("RNG") or 8
-	-- Trigger Leaping Slash toward the nearest enemy on placement
 	local nearest = findNearestEnemy(torso.Position, range)
 	if nearest and nearest.PrimaryPart then
 		Warrior.PerformLeapingSlash(tower, nearest.PrimaryPart.Position, enemiesFolder, Warrior.StartLeapSlashCooldown)
@@ -407,6 +428,7 @@ RunService.Heartbeat:Connect(function()
 	for tower, data in pairs(activeTowers) do
 		if not tower or not tower.Parent then
 			activeTowers[tower] = nil
+			hhLockedTarget[tower] = nil
 			releaseAggro(tower)
 			continue
 		end
@@ -414,12 +436,12 @@ RunService.Heartbeat:Connect(function()
 		local state     = tower:GetAttribute("State")     or "Idle"
 		local towerType = tower:GetAttribute("TowerType") or "Warrior"
 
-		-- ── Warrior-only: Survivor passive (out-of-combat healing) ──
+		-- ── Warrior: Survivor passive ──
 		if towerType == "Warrior" then
-			local hp           = tower:GetAttribute("HP")            or 0
-			local maxHp        = tower:GetAttribute("MaxHP")         or 1
+			local hp           = tower:GetAttribute("HP")             or 0
+			local maxHp        = tower:GetAttribute("MaxHP")          or 1
 			local lastCombat   = tower:GetAttribute("LastCombatTime") or now
-			local lastHealTick = tower:GetAttribute("LastHealTick")  or 0
+			local lastHealTick = tower:GetAttribute("LastHealTick")   or 0
 
 			if hp > 0 and hp < maxHp and (now - lastCombat) >= Warrior.SURVIVOR_OOC_TIME then
 				if (now - lastHealTick) >= Warrior.SURVIVOR_HEAL_INTERVAL then
@@ -447,15 +469,16 @@ RunService.Heartbeat:Connect(function()
 		local target = findTarget(tower)
 
 		if not target then
-			-- ── Deadeye: tick animation state machine even with no target ──
+			-- No target: clear locked HH target and tick Deadeye animation
 			if towerType == "Deadeye" then
+				hhLockedTarget[tower] = nil
 				Deadeye.UpdateCombatState(tower, false, nil)
 			end
 			tower:SetAttribute("State", "Idle")
 			continue
 		end
 
-		-- Establish aggro when enemy steps into its own attack range
+		-- Establish aggro
 		if not curAggro then
 			local torso      = tower.PrimaryPart
 			local enemyTorso = target.PrimaryPart
@@ -474,20 +497,55 @@ RunService.Heartbeat:Connect(function()
 		-- DEADEYE combat branch
 		-- ══════════════════════════════════════════════════════
 		if towerType == "Deadeye" then
-			-- Drive the gun-raise / gun-lower animation state machine
-			Deadeye.UpdateCombatState(tower, true, target)
 
-			-- Only fire when the gun is fully raised and the raise-delay has elapsed
-			if not Deadeye.IsReadyToFire(tower) then continue end
-			if now - data.lastAttackTime < 1 / atkSpd then continue end
+			local count      = tower:GetAttribute("BasicAttackCount") or 0
+			local isEnhanced = count >= Deadeye.ENHANCE_AFTER
 
-			tower:SetAttribute("State", "Attacking")
-			data.lastAttackTime = now
-			Deadeye.DoAttack(tower, target, enemiesFolder)
+			if isEnhanced then
+				-- Lock onto the Headhunter target once and keep it until the shot fires.
+				-- Re-evaluate only if the locked target is dead/gone.
+				local locked = hhLockedTarget[tower]
+				if not locked or not locked.Parent or (locked:GetAttribute("HP") or 0) <= 0 then
+					locked = findHeadhunterTarget(tower, target)
+					hhLockedTarget[tower] = locked
+				end
 
-		-- ══════════════════════════════════════════════════════
-		-- WARRIOR (default) combat branch
-		-- ══════════════════════════════════════════════════════
+				-- Drive the animation state machine toward the LOCKED target so the
+				-- gun raises and faces the correct enemy during the full aim window.
+				Deadeye.UpdateCombatState(tower, true, locked)
+
+				-- Wait for the gun to finish raising before we start the aim timer.
+				if not Deadeye.IsReadyToFire(tower) then continue end
+
+				-- Cooldown between shots still applies.
+				if now - data.lastAttackTime < 1 / atkSpd then continue end
+
+				-- Show crosshair/laser and block until aim delay has elapsed.
+				if not Deadeye.TickHeadhunterAim(tower, locked) then
+					continue  -- still aiming
+				end
+
+				-- Aim delay elapsed — fire!
+				hhLockedTarget[tower] = nil
+				tower:SetAttribute("State", "Attacking")
+				data.lastAttackTime = now
+				Deadeye.DoAttack(tower, target, enemiesFolder)
+
+			else
+				-- Normal Revolver shot — no aim VFX, no extra delay.
+				Deadeye.UpdateCombatState(tower, true, target)
+
+				if not Deadeye.IsReadyToFire(tower) then continue end
+				if now - data.lastAttackTime < 1 / atkSpd then continue end
+
+				tower:SetAttribute("State", "Attacking")
+				data.lastAttackTime = now
+				Deadeye.DoAttack(tower, target, enemiesFolder)
+			end
+
+			-- ══════════════════════════════════════════════════════
+			-- WARRIOR combat branch
+			-- ══════════════════════════════════════════════════════
 		else
 			if now - data.lastAttackTime < 1 / atkSpd then continue end
 
@@ -557,12 +615,10 @@ RunService.Heartbeat:Connect(function()
 		local enemyRange = enemy:GetAttribute("RangeStuds") or enemy:GetAttribute("RNG") or 5
 
 		if dist <= enemyRange then
-			-- Face the tower
 			local dir = Vector3.new(tr.Position.X - er.Position.X, 0, tr.Position.Z - er.Position.Z)
 			if dir.Magnitude > 0.1 then
 				er.CFrame = CFrame.new(er.Position, er.Position + dir.Unit)
 			end
-			-- Delegate attack to the enemy module; use the tower's own hit particles
 			local mod = getTowerModule(tower)
 			BasicZombie.AttackTower(enemy, tower, playEnemyPunchRemote, mod.SpawnHitParticles)
 		else
@@ -580,6 +636,10 @@ enemiesFolder.ChildRemoved:Connect(function(enemy)
 	if tower then
 		aggroMap[tower]     = nil
 		enemyAggroBy[enemy] = nil
+		-- If this enemy was a locked HH target, clear it so a new one is picked next frame
+		if hhLockedTarget[tower] == enemy then
+			hhLockedTarget[tower] = nil
+		end
 	end
 	BasicZombie.CleanupEnemy(enemy)
 	if activePushes[enemy] then
@@ -593,8 +653,8 @@ end)
 -- ============================================================
 
 placeRemote.OnServerEvent:Connect(function(player: Player, templateName: string, position: Vector3)
-	if typeof(position)    ~= "Vector3" then return end
-	if type(templateName)  ~= "string"  then return end
+	if typeof(position)   ~= "Vector3" then return end
+	if type(templateName) ~= "string"  then return end
 	if not TowerStats.Templates[templateName] then return end
 
 	local towerModel
@@ -623,7 +683,8 @@ moveRemote.OnServerEvent:Connect(function(player: Player, tower: Model, dest: Ve
 end)
 
 towersFolder.ChildRemoved:Connect(function(child)
-	activeTowers[child] = nil
+	activeTowers[child]   = nil
+	hhLockedTarget[child] = nil
 	getTowerModule(child).CleanupTower(child)
 	releaseAggro(child)
 	if activeMovements[child] then

@@ -11,6 +11,7 @@
 	                                  Fires a shot dealing 1× AP.
 	                                  Executes enemies under 25 % MaxHP unless the
 	                                  HP remaining exceeds 2× AP.
+	                                  Has a longer aim delay before firing.
 
 	Animation state machine
 	  idle  →  raising  →  shoot_hold  →  (lowering after 3 s no shot)  →  idle
@@ -21,11 +22,12 @@
 	  Idle      : 130403916615858  (looped)
 	  Walk      : rbxassetid://73323871613223   (same asset as Warrior, looped)
 	  Gun Raise : 75900515991486   (one-shot, Action priority)
-	  Shoot     : 108396781520756  (frozen at frame 0; advanced on each shot)
+	  Shoot     : 108396781520756  (one-shot, restarted from frame 0 on every shot)
 	  Gun Lower : 107226036750887  (one-shot, Action priority)
 ]]
 
 local TweenService  = game:GetService("TweenService")
+local RunService    = game:GetService("RunService")
 local Workspace     = game:GetService("Workspace")
 local ServerStorage = game:GetService("ServerStorage")
 
@@ -35,27 +37,38 @@ local Deadeye = {}
 -- CONSTANTS
 -- ============================================================
 
-Deadeye.ENHANCE_AFTER        = 2      -- basic attacks before enhanced fires
-Deadeye.EXECUTE_HP_THRESHOLD = 0.25   -- execute if enemy HP < 25 % of MaxHP
-Deadeye.EXECUTE_DMG_CAP_MULT = 2.0    -- execute only if enemy HP <= 2 × AP
-Deadeye.GUN_RAISE_DELAY      = 0.15   -- seconds after raise finishes before first shot
-Deadeye.GUN_LOWER_DELAY      = 3.0    -- seconds without a shot → lower gun
-Deadeye.BULLET_SPEED         = 180    -- studs / second
+Deadeye.ENHANCE_AFTER          = 2      -- basic attacks before enhanced fires
+Deadeye.EXECUTE_HP_THRESHOLD   = 0.25   -- execute if enemy HP < 25 % of MaxHP
+Deadeye.EXECUTE_DMG_CAP_MULT   = 2.0    -- execute only if enemy HP <= 2 × AP
+Deadeye.GUN_RAISE_DELAY        = 0.15   -- seconds after raise finishes before first shot
+Deadeye.GUN_LOWER_DELAY        = 3.0    -- seconds without a shot → lower gun
+Deadeye.BULLET_SPEED           = 180    -- studs / second
+Deadeye.HEADHUNTER_AIM_DELAY   = 1.2    -- extra aim hold time before Headhunter fires
 
 -- ====== ANIMATION IDs ======
 local IDLE_ANIM_ID  = "rbxassetid://130403916615858"
-local WALK_ANIM_ID  = "rbxassetid://73323871613223"   -- shared with Warrior
+local WALK_ANIM_ID  = "rbxassetid://73323871613223"
 local RAISE_ANIM_ID = "rbxassetid://75900515991486"
 local SHOOT_ANIM_ID = "rbxassetid://108396781520756"
 local LOWER_ANIM_ID = "rbxassetid://107226036750887"
 
 -- ============================================================
--- INTERNAL STATE  (module-level tables, keyed by tower Model)
+-- INTERNAL STATE
 -- ============================================================
 
 local animState  = {}  -- tower → animation-state record
 local baseC0s    = {}  -- tower → stored Motor6D C0 values
 local walkTracks = {}  -- tower → active walk AnimationTrack
+
+-- Headhunter aim VFX state per tower
+-- hhVFX[tower] = {
+--   crosshairParts: { Part, Part, Part },   -- the 3 neon red + parts on the enemy
+--   laserPart: Part,                         -- the beam from barrel to enemy
+--   heartbeatConn: RBXScriptConnection,
+--   aimStartTime: number,
+--   target: Model,
+-- }
+local hhVFX = {}
 
 -- ============================================================
 -- INTERNAL HELPERS
@@ -84,7 +97,6 @@ local function getOrCreateAnimator(towerModel: Model): Animator?
 	return nil
 end
 
--- Safe stop with optional blend
 local function safeStop(track, blendTime: number?)
 	if track then
 		pcall(function()
@@ -95,7 +107,6 @@ local function safeStop(track, blendTime: number?)
 	end
 end
 
--- Stop + destroy
 local function safeDestroy(track)
 	if track then
 		pcall(function()
@@ -105,8 +116,6 @@ local function safeDestroy(track)
 	end
 end
 
--- Load, configure, and immediately play an animation track.
--- Returns the track, or nil on failure.
 local function loadAndPlay(
 	animator: Animator,
 	animId: string,
@@ -128,37 +137,157 @@ local function loadAndPlay(
 	return nil
 end
 
--- Return (or lazily create) the per-tower animation state record.
 local function getAnimState(tower: Model)
 	if not animState[tower] then
 		animState[tower] = {
-			-- Current animation phase:
-			--   "idle" | "raising" | "raised" | "shoot_hold" | "lowering" | "walking"
-			gunState     = "idle",
-
-			-- Active track references
-			idleTrack    = nil,
-			raiseTrack   = nil,
-			shootTrack   = nil,
-			lowerTrack   = nil,
-
-			-- Timing
-			lastShotTime      = -math.huge,  -- never fired → always "long ago"
-			readyToFireTime   = 0,           -- tick() after which shooting is allowed
+			gunState          = "idle",
+			idleTrack         = nil,
+			raiseTrack        = nil,
+			shootTrack        = nil,
+			lowerTrack        = nil,
+			lastShotTime      = -math.huge,
+			readyToFireTime   = 0,
 		}
 	end
 	return animState[tower]
 end
 
 -- ============================================================
+-- VFX – HEADHUNTER AIM (crosshair + laser line)
+-- ============================================================
+
+-- Destroys all Headhunter aim VFX for a tower.
+local function clearHHVFX(tower: Model)
+	local vfx = hhVFX[tower]
+	if not vfx then return end
+
+	if vfx.heartbeatConn then
+		vfx.heartbeatConn:Disconnect()
+	end
+	if vfx.crosshairParts then
+		for _, p in ipairs(vfx.crosshairParts) do
+			if p and p.Parent then p:Destroy() end
+		end
+	end
+	if vfx.laserPart and vfx.laserPart.Parent then
+		vfx.laserPart:Destroy()
+	end
+	hhVFX[tower] = nil
+end
+
+--[[
+	Creates a red crosshair ( + shape ) floating above the target's chest
+	and a thin red laser beam from the gun barrel to the target.
+	Both update every Heartbeat while the Headhunter is aiming.
+	Returns the aimStartTime so the caller knows when the lock-on began.
+]]
+local function showHHVFX(tower: Model, target: Model): number
+	clearHHVFX(tower)
+
+	local RED        = Color3.fromRGB(255, 30, 30)
+	local CROSS_SIZE = 0.55   -- length of each arm
+	local CROSS_THICK = 0.07  -- thickness
+
+	-- ── Crosshair: 3 flat neon parts forming a + ──
+	local function makeCrossPart(size: Vector3): Part
+		local p = Instance.new("Part")
+		p.Size         = size
+		p.Color        = RED
+		p.Material     = Enum.Material.Neon
+		p.Anchored     = true
+		p.CanCollide   = false
+		p.CastShadow   = false
+		p.Transparency = 0
+		p.Parent       = Workspace
+		return p
+	end
+
+	-- Horizontal bar
+	local hBar = makeCrossPart(Vector3.new(CROSS_SIZE, CROSS_THICK, CROSS_THICK))
+	-- Vertical bar
+	local vBar = makeCrossPart(Vector3.new(CROSS_THICK, CROSS_SIZE, CROSS_THICK))
+	-- Center dot
+	local dot  = makeCrossPart(Vector3.new(CROSS_THICK * 1.5, CROSS_THICK * 1.5, CROSS_THICK * 1.5))
+
+	-- ── Laser beam (stretched part from barrel to target chest) ──
+	local laser = Instance.new("Part")
+	laser.Name         = "HHLaser"
+	laser.Material     = Enum.Material.Neon
+	laser.Color        = RED
+	laser.Anchored     = true
+	laser.CanCollide   = false
+	laser.CastShadow   = false
+	laser.Transparency = 0.35
+	laser.Parent       = Workspace
+
+	local aimStartTime = tick()
+
+	hhVFX[tower] = {
+		crosshairParts = { hBar, vBar, dot },
+		laserPart      = laser,
+		heartbeatConn  = nil,
+		aimStartTime   = aimStartTime,
+		target         = target,
+	}
+
+	-- ── Heartbeat: keep crosshair & laser tracking the target ──
+	local conn
+	conn = RunService.Heartbeat:Connect(function()
+		-- If tower or target is gone, clean up
+		if not tower or not tower.Parent
+			or not target or not target.Parent
+			or not hhVFX[tower]
+		then
+			if hhVFX[tower] then clearHHVFX(tower) end
+			return
+		end
+
+		local vfx = hhVFX[tower]
+		if not vfx then conn:Disconnect(); return end
+
+		local targetPP = target.PrimaryPart
+		if not targetPP then return end
+
+		-- Chest = PrimaryPart position raised slightly
+		local chestPos = targetPP.Position + Vector3.new(0, 0.6, 0)
+
+		-- Position crosshair parts (face the camera via flat CFrames)
+		hBar.CFrame = CFrame.new(chestPos)
+		vBar.CFrame = CFrame.new(chestPos)
+		dot.CFrame  = CFrame.new(chestPos)
+
+		-- Pulse alpha to make it blink
+		local elapsed = tick() - vfx.aimStartTime
+		local blink   = 0.25 + 0.25 * math.abs(math.sin(elapsed * math.pi * 3))
+		hBar.Transparency = blink
+		vBar.Transparency = blink
+		dot.Transparency  = blink
+
+		-- Laser: stretch from barrel/torso to chest
+		local barrel  = tower:FindFirstChild("GunBarrel", true)
+		local torso   = tower.PrimaryPart
+		local fromPos = (barrel and barrel.WorldPosition) or (torso and torso.Position) or chestPos
+
+		local midPos  = (fromPos + chestPos) * 0.5
+		local laserLen = (chestPos - fromPos).Magnitude
+		if laserLen > 0.1 then
+			laser.Size   = Vector3.new(0.04, 0.04, laserLen)
+			laser.CFrame = CFrame.new(midPos, chestPos)
+		end
+
+		-- Pulse laser transparency similarly
+		laser.Transparency = 0.2 + 0.4 * math.abs(math.sin(elapsed * math.pi * 3))
+	end)
+
+	hhVFX[tower].heartbeatConn = conn
+
+	return aimStartTime
+end
+
+-- ============================================================
 -- VFX – BULLET WITH TRAIL
 -- ============================================================
 
---[[
-	Spawns a bullet Part that travels from `fromPos` to `toPos`.
-	A Trail is attached for a glowing smoke-trace effect.
-	`isEnhanced` → gold colour for Headhunter shots.
-]]
 function Deadeye.SpawnBullet(fromPos: Vector3, toPos: Vector3, isEnhanced: boolean?)
 	local dir  = toPos - fromPos
 	local dist = dir.Magnitude
@@ -178,7 +307,6 @@ function Deadeye.SpawnBullet(fromPos: Vector3, toPos: Vector3, isEnhanced: boole
 	bullet.CFrame      = CFrame.new(fromPos, toPos)
 	bullet.Parent      = Workspace
 
-	-- Trail needs two Attachments on the bullet
 	local attFront = Instance.new("Attachment")
 	attFront.Position = Vector3.new(0, 0,  0.28)
 	attFront.Parent   = bullet
@@ -212,7 +340,6 @@ function Deadeye.SpawnBullet(fromPos: Vector3, toPos: Vector3, isEnhanced: boole
 	})
 	trail.Parent = bullet
 
-	-- Smooth tween to destination so the trail renders cleanly
 	local travelTime = dist / Deadeye.BULLET_SPEED
 	local tween = TweenService:Create(
 		bullet,
@@ -244,7 +371,6 @@ function Deadeye.SpawnHitParticles(position: Vector3, color: Color3)
 	local att = Instance.new("Attachment")
 	att.Parent = anchor
 
-	-- Bright flash
 	local flash = Instance.new("ParticleEmitter")
 	flash.Color       = ColorSequence.new(Color3.fromRGB(255, 235, 130))
 	flash.Size        = NumberSequence.new({
@@ -263,7 +389,6 @@ function Deadeye.SpawnHitParticles(position: Vector3, color: Color3)
 	flash.Parent      = att
 	flash:Emit(5)
 
-	-- Impact splatter
 	local splatter = Instance.new("ParticleEmitter")
 	splatter.Color       = ColorSequence.new(color)
 	splatter.Size        = NumberSequence.new({
@@ -345,7 +470,7 @@ function Deadeye.CreateModel(position: Vector3, TowerStats: any): Model?
 end
 
 -- ============================================================
--- MOTOR6D BASE STORAGE  (needed to restore pose after walk)
+-- MOTOR6D BASE STORAGE
 -- ============================================================
 
 function Deadeye.StoreBaseC0s(model: Model)
@@ -372,19 +497,21 @@ function Deadeye.RestoreBaseC0s(model: Model)
 end
 
 -- ============================================================
--- WALK ANIMATION  (public – called by TowerManager movement)
+-- WALK ANIMATION
 -- ============================================================
 
 function Deadeye.StartWalk(model: Model)
-	if walkTracks[model] then return end   -- already walking
+	if walkTracks[model] then return end
 
-	-- Stop all gun animations so walk can blend in cleanly
 	local st = getAnimState(model)
 	safeStop(st.idleTrack,  0.15)
 	safeStop(st.raiseTrack, 0.1)
 	safeStop(st.shootTrack, 0.1)
 	safeStop(st.lowerTrack, 0.15)
 	st.gunState = "walking"
+
+	-- Cancel any in-progress Headhunter aim when walking
+	clearHHVFX(model)
 
 	local animator = getOrCreateAnimator(model)
 	if not animator then return end
@@ -404,7 +531,6 @@ function Deadeye.StopWalk(model: Model)
 	end
 	Deadeye.RestoreBaseC0s(model)
 
-	-- Return animation state to idle so the AI loop can trigger gun raise
 	local st = animState[model]
 	if st then
 		st.gunState = "idle"
@@ -415,40 +541,34 @@ end
 -- INTERNAL ANIMATION STATE MACHINE
 -- ============================================================
 
--- Play (or restart) the looped idle animation.
 local function playIdle(tower: Model, st)
 	local animator = getOrCreateAnimator(tower)
 	if not animator then return end
-
 	safeDestroy(st.idleTrack)
 	local track = loadAndPlay(animator, IDLE_ANIM_ID, true, Enum.AnimationPriority.Idle, 0.2)
 	st.idleTrack = track
 end
 
--- Transition: idle → raising → (after anim) raised → (after delay) shoot_hold
 local function triggerGunRaise(tower: Model, st)
 	if st.gunState == "raising"    or
 	   st.gunState == "raised"     or
 	   st.gunState == "shoot_hold" then
-		return   -- already mid-raise or raised
+		return
 	end
 
 	st.gunState = "raising"
 
-	-- Fade out idle / lower tracks
 	safeStop(st.idleTrack, 0.12)
 	safeStop(st.lowerTrack, 0.1)
 
 	local animator = getOrCreateAnimator(tower)
 	if not animator then
-		-- No animator: skip straight to shoot_hold
-		st.gunState      = "shoot_hold"
+		st.gunState        = "shoot_hold"
 		st.readyToFireTime = tick() + Deadeye.GUN_RAISE_DELAY
 		st.lastShotTime    = tick()
 		return
 	end
 
-	-- Destroy stale raise track, start fresh
 	safeDestroy(st.raiseTrack)
 	local raiseTrack = loadAndPlay(animator, RAISE_ANIM_ID, false, Enum.AnimationPriority.Action, 0.12)
 	if not raiseTrack then
@@ -459,55 +579,26 @@ local function triggerGunRaise(tower: Model, st)
 	end
 	st.raiseTrack = raiseTrack
 
-	-- Pre-load the shoot track now (frozen at frame 0) so it is instantly
-	-- available when the raise animation finishes.
-	safeDestroy(st.shootTrack)
-	st.shootTrack = nil
-	local ok, shootTrack = pcall(function()
-		local obj = Instance.new("Animation")
-		obj.AnimationId = SHOOT_ANIM_ID
-		local t = animator:LoadAnimation(obj)
-		obj:Destroy()
-		t.Looped   = false
-		t.Priority = Enum.AnimationPriority.Action
-		return t
-	end)
-	if ok and shootTrack then
-		st.shootTrack = shootTrack
-	end
-
-	-- Wait for raise to finish, then enter shoot_hold
 	task.spawn(function()
 		raiseTrack.Stopped:Wait()
 
 		if not tower or not tower.Parent then return end
-		if st.gunState ~= "raising" then return end   -- was interrupted (walk etc.)
+		if st.gunState ~= "raising" then return end
 
 		st.gunState        = "raised"
 		st.readyToFireTime = tick() + Deadeye.GUN_RAISE_DELAY
-		st.lastShotTime    = tick()   -- reset gun-lower countdown so it doesn't immediately fire
+		st.lastShotTime    = tick()
 
-		-- 0.15 s lock-on pause before entering shoot_hold
 		task.wait(Deadeye.GUN_RAISE_DELAY)
 
 		if not tower or not tower.Parent then return end
 		if st.gunState ~= "raised" then return end
 
 		st.gunState     = "shoot_hold"
-		st.lastShotTime = tick()   -- start gun-lower countdown from now
-
-		-- Freeze the shoot track at its first frame (the "aimed" pose)
-		if st.shootTrack then
-			pcall(function()
-				st.shootTrack:Play(0.08)
-				st.shootTrack:AdjustSpeed(0)
-				st.shootTrack.TimePosition = 0
-			end)
-		end
+		st.lastShotTime = tick()
 	end)
 end
 
--- Transition: shoot_hold → lowering → (after anim) idle
 local function triggerGunLower(tower: Model, st)
 	if st.gunState == "lowering" or
 	   st.gunState == "idle"     or
@@ -516,9 +607,10 @@ local function triggerGunLower(tower: Model, st)
 	end
 
 	st.gunState = "lowering"
+	clearHHVFX(tower)
 
-	-- Fade out shoot track
 	safeStop(st.shootTrack, 0.12)
+	st.shootTrack = nil
 
 	local animator = getOrCreateAnimator(tower)
 	if not animator then
@@ -540,53 +632,35 @@ local function triggerGunLower(tower: Model, st)
 		lowerTrack.Stopped:Wait()
 		if not tower or not tower.Parent then return end
 		if st.gunState ~= "lowering" then return end
-
 		st.gunState = "idle"
 		playIdle(tower, st)
 	end)
 end
 
--- Brief shoot animation on each fired shot: advance the frozen track for a
--- fraction of a second so the recoil is visible, then re-freeze at frame 0.
+-- Play the shoot animation from frame 0 on every shot.
 local function playShootBrief(tower: Model, st)
+	local animator = getOrCreateAnimator(tower)
+	if not animator then return end
+
 	if st.shootTrack then
-		pcall(function()
-			st.shootTrack.TimePosition = 0
-			st.shootTrack:AdjustSpeed(1)
-		end)
-		task.delay(0.09, function()
-			if st.shootTrack and tower and tower.Parent then
-				pcall(function()
-					st.shootTrack:AdjustSpeed(0)
-					st.shootTrack.TimePosition = 0
-				end)
-			end
-		end)
-	else
-		-- Fallback: play a fresh track for a single burst
-		local animator = getOrCreateAnimator(tower)
-		if not animator then return end
-		local ok, track = pcall(function()
-			local obj = Instance.new("Animation")
-			obj.AnimationId = SHOOT_ANIM_ID
-			local t = animator:LoadAnimation(obj)
-			obj:Destroy()
-			t.Looped   = false
-			t.Priority = Enum.AnimationPriority.Action
-			t:Play(0.05)
-			return t
-		end)
-		if ok and track then
-			st.shootTrack = track
-			task.delay(0.09, function()
-				if track and tower and tower.Parent then
-					pcall(function()
-						track:AdjustSpeed(0)
-						track.TimePosition = 0
-					end)
-				end
-			end)
-		end
+		safeStop(st.shootTrack, 0)
+		safeDestroy(st.shootTrack)
+		st.shootTrack = nil
+	end
+
+	local ok, track = pcall(function()
+		local obj = Instance.new("Animation")
+		obj.AnimationId = SHOOT_ANIM_ID
+		local t = animator:LoadAnimation(obj)
+		obj:Destroy()
+		t.Looped   = false
+		t.Priority = Enum.AnimationPriority.Action
+		t:Play(0.05)
+		return t
+	end)
+
+	if ok and track then
+		st.shootTrack = track
 	end
 end
 
@@ -615,27 +689,36 @@ end
 -- PUBLIC – ANIMATION INTERFACE
 -- ============================================================
 
--- Must be called once after placing a Deadeye tower.
 function Deadeye.InitTower(tower: Model)
 	local st = getAnimState(tower)
 	playIdle(tower, st)
 end
 
--- Returns true when the gun is raised, the 0.15 s delay has elapsed, and the
--- tower is ready to fire a shot.
 function Deadeye.IsReadyToFire(tower: Model): boolean
 	local st = animState[tower]
 	if not st then return false end
-	return st.gunState == "shoot_hold" and tick() >= st.readyToFireTime
+	if st.gunState ~= "shoot_hold" then return false end
+	if tick() < st.readyToFireTime then return false end
+	return true
 end
 
--- Called every AI heartbeat.  Drives gun-raise / gun-lower transitions and
--- keeps the tower facing its current target.
+--[[
+	IsReadyToFireEnhanced: same as IsReadyToFire but also checks that the
+	Headhunter aim delay (HEADHUNTER_AIM_DELAY) has elapsed since the VFX
+	was first shown.  Returns true only when both conditions are met.
+]]
+function Deadeye.IsReadyToFireEnhanced(tower: Model): boolean
+	if not Deadeye.IsReadyToFire(tower) then return false end
+	local vfx = hhVFX[tower]
+	if not vfx then return false end
+	return (tick() - vfx.aimStartTime) >= Deadeye.HEADHUNTER_AIM_DELAY
+end
+
 function Deadeye.UpdateCombatState(tower: Model, hasTarget: boolean, target: Model?)
 	local st = getAnimState(tower)
 	if not st then return end
 
-	-- ── Gun-lower timer: fires regardless of whether there is a target ──
+	-- Gun-lower timer
 	if (st.gunState == "shoot_hold" or st.gunState == "raised") and
 	   (tick() - st.lastShotTime) >= Deadeye.GUN_LOWER_DELAY
 	then
@@ -644,12 +727,10 @@ function Deadeye.UpdateCombatState(tower: Model, hasTarget: boolean, target: Mod
 	end
 
 	if hasTarget and target then
-		-- Trigger gun raise when idle (after lower or on fresh acquisition)
 		if st.gunState == "idle" then
 			triggerGunRaise(tower, st)
 		end
 
-		-- While raising / raised / shoot_hold: keep facing the target
 		if st.gunState == "raising" or st.gunState == "raised" or st.gunState == "shoot_hold" then
 			local torso       = tower.PrimaryPart
 			local targetTorso = target.PrimaryPart
@@ -665,7 +746,8 @@ function Deadeye.UpdateCombatState(tower: Model, hasTarget: boolean, target: Mod
 			end
 		end
 	else
-		-- No target → ensure idle animation is actually playing
+		-- No target: clear any lingering Headhunter aim VFX
+		clearHHVFX(tower)
 		if st.gunState == "idle" then
 			if not (st.idleTrack and st.idleTrack.IsPlaying) then
 				playIdle(tower, st)
@@ -675,17 +757,32 @@ function Deadeye.UpdateCombatState(tower: Model, hasTarget: boolean, target: Mod
 end
 
 -- ============================================================
--- PUBLIC – ATTACK
+-- PUBLIC – HEADHUNTER AIM VFX CONTROL
 -- ============================================================
 
 --[[
-	Execute one attack cycle.  Handles:
-	  - Basic  (Revolver): 1× ATK damage to `target`.
-	  - Enhanced (Headhunter): 1× AP to the highest-MaxHP enemy in range;
-	    execute-threshold check.
-
-	Returns true if an attack actually happened.
+	Called by TowerManager every heartbeat when a Headhunter shot is pending
+	(gun is shoot_hold, basic count is maxed, cooldown is satisfied).
+	Shows/maintains the crosshair + laser VFX on the intended target.
+	Returns true once the aim delay has elapsed and the shot can fire.
 ]]
+function Deadeye.TickHeadhunterAim(tower: Model, target: Model): boolean
+	local vfx = hhVFX[tower]
+
+	-- If we have no VFX yet, or the target changed, restart the aim timer
+	if not vfx or vfx.target ~= target then
+		showHHVFX(tower, target)
+		vfx = hhVFX[tower]
+	end
+
+	if not vfx then return false end
+	return (tick() - vfx.aimStartTime) >= Deadeye.HEADHUNTER_AIM_DELAY
+end
+
+-- ============================================================
+-- PUBLIC – ATTACK
+-- ============================================================
+
 function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): boolean
 	local st = getAnimState(tower)
 
@@ -708,6 +805,7 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 	end
 
 	if not actualTarget or not actualTarget.Parent or not actualTarget.PrimaryPart then
+		clearHHVFX(tower)
 		return false
 	end
 
@@ -724,16 +822,23 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 		end
 	end
 
+	-- Capture bullet position BEFORE damage (enemy may be destroyed below)
+	local bulletToPos = actualTarget.PrimaryPart and actualTarget.PrimaryPart.Position
+		or (torso and (torso.Position + torso.CFrame.LookVector * 5))
+
+	-- ── Clear Headhunter aim VFX right as the shot fires ──
+	if isEnhanced then
+		clearHHVFX(tower)
+	end
+
 	-- ── Damage ──
 	if isEnhanced then
-		-- Headhunter
 		tower:SetAttribute("BasicAttackCount", 0)
 		local damage = ap * multi
 		local hp     = actualTarget:GetAttribute("HP")    or 0
 		local maxHP  = actualTarget:GetAttribute("MaxHP") or hp
 		local newHP  = hp - damage
 
-		-- Execute check
 		if hp < maxHP * Deadeye.EXECUTE_HP_THRESHOLD and
 		   hp <= ap * Deadeye.EXECUTE_DMG_CAP_MULT
 		then
@@ -745,7 +850,6 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 			actualTarget:Destroy()
 		end
 	else
-		-- Revolver
 		tower:SetAttribute("BasicAttackCount", count + 1)
 		local damage = atk * multi
 		local hp     = actualTarget:GetAttribute("HP") or 0
@@ -757,23 +861,20 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 	end
 
 	-- ── VFX ──
-	if actualTarget.PrimaryPart and actualTarget.Parent then
+	if bulletToPos then
 		local hitColor = isEnhanced
-			and Color3.fromRGB(255, 200, 50)    -- gold – Headhunter
-			or  Color3.fromRGB(210, 210, 255)   -- pale-blue – Revolver
-		Deadeye.SpawnHitParticles(actualTarget.PrimaryPart.Position, hitColor)
+			and Color3.fromRGB(255, 200, 50)
+			or  Color3.fromRGB(210, 210, 255)
+		Deadeye.SpawnHitParticles(bulletToPos, hitColor)
 	end
 
-	-- Bullet: fired from gun barrel (or torso) toward the impact point
-	if torso then
+	if torso and bulletToPos then
 		local barrel  = tower:FindFirstChild("GunBarrel", true)
 		local fromPos = barrel and barrel.WorldPosition or torso.Position
-		local toPos   = (actualTarget.PrimaryPart and actualTarget.PrimaryPart.Position)
-		                or (torso.Position + torso.CFrame.LookVector * 5)
-		Deadeye.SpawnBullet(fromPos, toPos, isEnhanced)
+		Deadeye.SpawnBullet(fromPos, bulletToPos, isEnhanced)
 	end
 
-	-- ── Update animation & timer ──
+	-- ── Shoot animation & timer ──
 	playShootBrief(tower, st)
 	st.lastShotTime = tick()
 
@@ -781,10 +882,12 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 end
 
 -- ============================================================
--- CLEANUP  (call when the tower is removed)
+-- CLEANUP
 -- ============================================================
 
 function Deadeye.CleanupTower(tower: Model)
+	clearHHVFX(tower)
+
 	local st = animState[tower]
 	if st then
 		safeDestroy(st.idleTrack)

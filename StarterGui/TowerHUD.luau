@@ -189,3 +189,4 @@ descLabel.TextWrapped      = true
 descLabel.TextXAlignment   = Enum.TextXAlignment.Left
 descLabel.TextYAlignment   = Enum.TextYAlignment.Top
 descLabel.Parent           = card
+ww

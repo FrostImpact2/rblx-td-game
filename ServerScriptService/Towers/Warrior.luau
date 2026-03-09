@@ -912,9 +912,7 @@ function Warrior.StopWalk(model: Model)
 	Warrior.RestoreBaseC0s(model)
 end
 
--- ============================================================
--- CLEANUP: call when tower is removed
--- ============================================================
+-- sigma call when tower is removed
 
 function Warrior.CleanupTower(tower: Model)
 	attackAnimData[tower] = nil

@@ -26,7 +26,7 @@ TowerStats.Templates = {
 		ATK      = 12,
 		AP       = 15,    -- ability power used by Headhunter
 		ATK_SPD  = 1.0,   -- attacks per second
-		RNG      = 22,    -- long ranged
+		RNG      = 30,    -- long ranged
 		HP       = 75,
 		MOVE_SPD = 14,
 
