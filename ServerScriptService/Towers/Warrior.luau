@@ -3,16 +3,16 @@
 	Place in ServerScriptService/Towers/
 
 	Contains all Warrior-specific tower logic:
-	  - Model creation (cloned from ReplicatedStorage.TowerModels.Warrior)
+	  - Model creation (cloned from ServerStorage.TowerModels.Warrior)
 	  - Abilities: Cleave (basic attack), Leaping Slash (AOE), Relentless Advance (leap-move)
 	  - Passive: Survivor (out-of-combat burst healing)
-	  - Animations: walk (Animation-based), attack (Animation-based), leap (Motor6D-based)
+	  - Animations: walk (Animation-based), attack (Animation-based), leap (Animation+Motor6D-based)
 	  - VFX: hit particles, slash, heal, leap trail
 ]]
 
-local RunService        = game:GetService("RunService")
-local Workspace         = game:GetService("Workspace")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService    = game:GetService("RunService")
+local Workspace     = game:GetService("Workspace")
+local ServerStorage = game:GetService("ServerStorage")
 
 local Warrior = {}
 
@@ -25,12 +25,39 @@ Warrior.LEAP_SLASH_DAMAGE          = 0.8     -- 80% ATK
 Warrior.LEAP_SLASH_CONE_ANGLE      = math.rad(60)
 Warrior.LEAP_SLASH_CONE_RANGE_MULT = 1.5
 Warrior.LEAP_RANGE_MULT            = 3
-Warrior.LEAP_DURATION              = 1
-Warrior.LEAP_HEIGHT                = 4
+Warrior.LEAP_DURATION              = 1.6     -- ↑ increased from 1.0 for more airtime
+Warrior.LEAP_HEIGHT                = 7       -- ↑ increased from 4 for a higher arc
 
 Warrior.SURVIVOR_OOC_TIME      = 3
 Warrior.SURVIVOR_HEAL_INTERVAL = 3
 Warrior.SURVIVOR_HEAL_PERCENT  = 0.02
+
+-- ====== ANIMATION CONSTANTS ======
+local WALK_ANIM_ID  = "rbxassetid://73323871613223"
+local SWING_ANIM_ID = "rbxassetid://100041859398995"
+local LEAP_ANIM_ID  = "rbxassetid://138956726369213"
+
+-- Leap animation: 85 total frames at 30 FPS
+--   Frames  1-32 : windup + early jump  (played during windup + first ~20% of flight)
+--   Frame   33   : held for the bulk of airtime (~20%-75% of flight)
+--   Frames 34-85 : late airtime + landing + return to idle (~75%-100% of flight + post-landing)
+local LEAP_ANIM_FPS            = 30
+local LEAP_ANIM_TOTAL_FRAMES   = 85
+
+local LEAP_HOLD_FRAME          = 33
+local LEAP_LANDING_START_FRAME = 34
+
+-- Time positions (seconds) derived from frame indices (frame 1 = time 0)
+local LEAP_HOLD_TIME           = (LEAP_HOLD_FRAME - 1) / LEAP_ANIM_FPS
+local LEAP_LANDING_START_TIME  = (LEAP_LANDING_START_FRAME - 1) / LEAP_ANIM_FPS
+local LEAP_ANIM_END_TIME       = (LEAP_ANIM_TOTAL_FRAMES - 1) / LEAP_ANIM_FPS
+
+-- Flight-arc alpha thresholds
+local LEAP_FREEZE_ALPHA   = 0.20   -- freeze on frame 33 at 20% of flight
+local LEAP_UNFREEZE_ALPHA = 0.75   -- resume frames 34-85 at 75% of flight
+
+-- Post-landing: how long (seconds) to let the landing animation play before calling onComplete
+local LEAP_LANDING_LINGER = 0.8    -- ↑ increased for a longer "landing pose" hold
 
 -- ============================================================
 -- INTERNAL ANIMATION HELPERS
@@ -102,7 +129,6 @@ function Warrior.SpawnSlashParticles(position: Vector3, direction: Vector3)
 	anchor.CFrame       = CFrame.new(position, position + direction)
 	anchor.Parent       = Workspace
 
-	-- Main slash burst
 	local att1 = Instance.new("Attachment")
 	att1.Parent = anchor
 
@@ -120,7 +146,6 @@ function Warrior.SpawnSlashParticles(position: Vector3, direction: Vector3)
 	slash.Parent      = att1
 	slash:Emit(20)
 
-	-- Sparks
 	local att2 = Instance.new("Attachment")
 	att2.Parent = anchor
 
@@ -136,7 +161,6 @@ function Warrior.SpawnSlashParticles(position: Vector3, direction: Vector3)
 	sparks.Parent       = att2
 	sparks:Emit(12)
 
-	-- Impact ring expansion
 	local ring = Instance.new("Part")
 	ring.Name         = "ImpactRing"
 	ring.Shape        = Enum.PartType.Cylinder
@@ -262,7 +286,6 @@ function Warrior.SpawnLeapTrailParticles(towerModel: Model): () -> ()
 	wind.Rate         = 40
 	wind.Parent       = att2
 
-	-- Returns a stop function
 	return function()
 		trail.Rate = 0
 		wind.Rate  = 0
@@ -281,11 +304,10 @@ function Warrior.CreateModel(position: Vector3, TowerStats: any, leapRangeMult: 
 	local template = TowerStats.Templates["Warrior"]
 	if not template then return nil end
 
-	-- Clone the pre-built model from ReplicatedStorage
-	local towerModels = ReplicatedStorage:FindFirstChild("TowerModels")
+	local towerModels = ServerStorage:FindFirstChild("TowerModels")
 	local templateModel = towerModels and towerModels:FindFirstChild("Warrior")
 	if not templateModel then
-		warn("[Warrior] ReplicatedStorage.TowerModels.Warrior not found")
+		warn("[Warrior] ServerStorage.TowerModels.Warrior not found")
 		return nil
 	end
 
@@ -296,7 +318,6 @@ function Warrior.CreateModel(position: Vector3, TowerStats: any, leapRangeMult: 
 		model.PrimaryPart.Anchored = true
 	end
 
-	-- Range indicators (gameplay indicators, created programmatically)
 	local rangeStuds = template.RNG
 
 	local circle = Instance.new("Part")
@@ -322,7 +343,6 @@ function Warrior.CreateModel(position: Vector3, TowerStats: any, leapRangeMult: 
 	leapCircle.Material     = Enum.Material.Neon
 	leapCircle.Parent       = model
 
-	-- Attributes
 	model:SetAttribute("ATK",               template.ATK)
 	model:SetAttribute("ATK_SPD",           template.ATK_SPD)
 	model:SetAttribute("RNG",               rangeStuds)
@@ -353,7 +373,6 @@ local function createConeIndicator(position: Vector3, direction: Vector3, coneRa
 	local groundY = position.Y - 2
 	local yaw     = math.atan2(direction.X, direction.Z)
 
-	-- Expanding shockwave ring
 	local ring = Instance.new("Part")
 	ring.Name         = "ShockwaveRing"
 	ring.Shape        = Enum.PartType.Cylinder
@@ -366,7 +385,6 @@ local function createConeIndicator(position: Vector3, direction: Vector3, coneRa
 	ring.CFrame       = CFrame.new(position.X, groundY, position.Z) * CFrame.Angles(0, 0, math.rad(90))
 	ring.Parent       = Workspace
 
-	-- Ground scorch (flat disc that flashes bright then fades)
 	local scorch = Instance.new("Part")
 	scorch.Name         = "Scorch"
 	scorch.Shape        = Enum.PartType.Cylinder
@@ -379,7 +397,6 @@ local function createConeIndicator(position: Vector3, direction: Vector3, coneRa
 	scorch.CFrame       = CFrame.new(position.X, groundY - 0.05, position.Z) * CFrame.Angles(0, 0, math.rad(90))
 	scorch.Parent       = Workspace
 
-	-- Radial slash lines radiating outward within the cone angle
 	local NUM_LINES = 7
 	local lines     = {}
 	for i = 1, NUM_LINES do
@@ -401,7 +418,6 @@ local function createConeIndicator(position: Vector3, direction: Vector3, coneRa
 		table.insert(lines, line)
 	end
 
-	-- Animate: expand ring + fade everything over ~0.4 seconds
 	task.spawn(function()
 		local elapsed   = 0
 		local totalTime = 0.4
@@ -411,15 +427,12 @@ local function createConeIndicator(position: Vector3, direction: Vector3, coneRa
 			local a      = math.clamp(elapsed / totalTime, 0, 1)
 			local smooth = a * a * (3 - 2 * a)
 
-			-- Expand ring outward to match cone range
 			local ringDiam = coneRange * 2 * smooth
 			ring.Size         = Vector3.new(0.12, math.max(ringDiam, 0.5), math.max(ringDiam, 0.5))
 			ring.Transparency = 0.1 + 0.9 * smooth
 
-			-- Fade scorch
 			scorch.Transparency = 0.3 + 0.7 * smooth
 
-			-- Fade radial lines
 			for _, ln in ipairs(lines) do
 				if ln and ln.Parent then
 					ln.Transparency = smooth
@@ -474,7 +487,6 @@ function Warrior.PerformLeapingSlash(
 	createConeIndicator(slashPos, dir, CONE_RANGE, Warrior.LEAP_SLASH_CONE_ANGLE)
 	Warrior.SpawnSlashParticles(slashPos, dir)
 
-	-- Damage all enemies in the cone
 	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
 		if enemy:IsA("Model") and enemy.PrimaryPart and (enemy:GetAttribute("HP") or 0) > 0 then
 			local toEnemy = enemy.PrimaryPart.Position - slashPos
@@ -503,6 +515,30 @@ end
 -- LEAP ANIMATION  (Relentless Advance)
 -- ============================================================
 
+--[[
+	Animation phase plan (85 frames @ 30 FPS):
+
+	WINDUP PHASE (before flight):
+	  - Start the leap AnimationTrack at a calculated speed so that frames 1-32
+	    finish exactly when the windup phase ends + the first 20% of flight elapses.
+
+	FLIGHT PHASE:
+	  - At 20% flight alpha → freeze on frame 33 (the airborne pose).
+	  - Frame 33 is held for the bulk of airtime (20% → 75%).
+	  - At 75% flight alpha → unfreeze and play frames 34-85 slowly; these cover
+	    the final descent + the landing impact + return to idle.
+
+	POST-FLIGHT (landing linger):
+	  - After the flight arc completes, we do NOT immediately call onComplete.
+	  - Instead we wait LEAP_LANDING_LINGER seconds (or until the anim track finishes,
+	    whichever is longer) so the landing/recovery frames play out fully.
+	  - Then we restore motor6D bases and call onComplete → state goes back to "Idle".
+
+	SAFETY:
+	  - onComplete is wrapped so it can only fire once (no double-idle).
+	  - Every early-return path (tower destroyed mid-leap, etc.) calls onComplete.
+]]
+
 function Warrior.PlayLeapAnimation(
 	tower: Model,
 	dest: Vector3,
@@ -510,11 +546,21 @@ function Warrior.PlayLeapAnimation(
 	findNearestEnemyFn: ((Vector3, number, Folder) -> Model?)?,
 	enemiesFolder: Folder?
 )
+	-- ── SAFETY WRAPPER: guarantee onComplete fires exactly once ──
+	local completeFired = false
+	local function safeComplete()
+		if completeFired then return end
+		completeFired = true
+		if onComplete then onComplete() end
+	end
+
 	local torso = tower.PrimaryPart
 	if not torso then
-		if onComplete then onComplete() end
+		safeComplete()
 		return
 	end
+
+	local animator = getOrCreateAnimator(tower)
 
 	local startPos = torso.Position
 	local dir = Vector3.new(dest.X - startPos.X, 0, dest.Z - startPos.Z)
@@ -524,6 +570,7 @@ function Warrior.PlayLeapAnimation(
 		dir = torso.CFrame.LookVector
 	end
 
+	-- Motor6D references
 	local rs = torso:FindFirstChild("RightShoulder")
 	local ls = torso:FindFirstChild("LeftShoulder")
 	local lh = torso:FindFirstChild("LeftHip")
@@ -536,8 +583,8 @@ function Warrior.PlayLeapAnimation(
 	local rhBase = rh and rh.C0
 	local nkBase = nk and nk.C0
 
-	local WINDUP_TIME    = 0.4
-	local windupElapsed  = 0
+	local WINDUP_TIME   = 0.5   -- ↑ slightly longer windup for smoother start
+	local windupElapsed = 0
 
 	torso.CFrame = CFrame.new(startPos, startPos + dir)
 
@@ -553,12 +600,55 @@ function Warrior.PlayLeapAnimation(
 		end
 	end
 
-	-- WINDUP PHASE
+	-- Helper to restore all motor6D bases
+	local function restoreAllMotors()
+		if rs and rs.Parent and rsBase then rs.C0 = rsBase end
+		if ls and ls.Parent and lsBase then ls.C0 = lsBase end
+		if nk and nk.Parent and nkBase then nk.C0 = nkBase end
+		if lh and lh.Parent and lhBase then lh.C0 = lhBase end
+		if rh and rh.Parent and rhBase then rh.C0 = rhBase end
+	end
+
+	-- ── Load the leap animation track ──
+	local leapTrack = nil
+	if animator and LEAP_ANIM_ID then
+		local ok, track = pcall(function()
+			local animInstance = Instance.new("Animation")
+			animInstance.AnimationId = LEAP_ANIM_ID
+			local t = animator:LoadAnimation(animInstance)
+			animInstance:Destroy()
+			return t
+		end)
+		if ok and track then
+			leapTrack = track
+			leapTrack.Looped   = false
+			leapTrack.Priority = Enum.AnimationPriority.Action
+		end
+	end
+
+	-- Calculate timing
+	local FLIGHT_TIME        = Warrior.LEAP_DURATION - WINDUP_TIME - 0.15
+	local windupAnimDuration = LEAP_HOLD_TIME  -- seconds of anim for frames 1-32
+	local realWindupSpan     = WINDUP_TIME + (LEAP_FREEZE_ALPHA * FLIGHT_TIME)
+	local windupSpeed        = windupAnimDuration / realWindupSpan
+
+	-- Start the track so frames 1-32 play during windup
+	if leapTrack then
+		leapTrack:Play(0)
+		leapTrack:AdjustSpeed(windupSpeed)
+	end
+
+	local frozen   = false
+	local unfrozen = false
+
+	-- ── WINDUP PHASE ──
 	local windupConn
 	windupConn = RunService.Heartbeat:Connect(function(dt)
 		if not torso or not torso.Parent then
 			windupConn:Disconnect()
-			if onComplete then onComplete() end
+			if leapTrack then pcall(function() leapTrack:Stop() leapTrack:Destroy() end) end
+			restoreAllMotors()
+			safeComplete()
 			return
 		end
 
@@ -566,6 +656,7 @@ function Warrior.PlayLeapAnimation(
 		local t      = math.clamp(windupElapsed / WINDUP_TIME, 0, 1)
 		local smooth = t * t * (3 - 2 * t)
 
+		-- Motor6D windup overlay
 		if rs and rsBase then rs.C0 = rsBase * CFrame.Angles(-2.8 * smooth, 0,          0.3 * smooth)  end
 		if ls and lsBase then ls.C0 = lsBase * CFrame.Angles(-0.3 * smooth, 0,         -0.15 * smooth) end
 		if lh and lhBase then lh.C0 = lhBase * CFrame.Angles( 0.3 * smooth, 0, 0) * CFrame.new(0, -0.15 * smooth, 0) end
@@ -575,30 +666,32 @@ function Warrior.PlayLeapAnimation(
 		if t >= 1 then
 			windupConn:Disconnect()
 
-			local stopTrail     = Warrior.SpawnLeapTrailParticles(tower)
-			local launchPos     = torso.Position
-			local FLIGHT_TIME   = Warrior.LEAP_DURATION - WINDUP_TIME - 0.12
+			-- ── FLIGHT PHASE ──
+			local stopTrail      = Warrior.SpawnLeapTrailParticles(tower)
+			local launchPos      = torso.Position
 			local SLOWDOWN_START = 0.75
-			local flightElapsed = 0
+			local flightElapsed  = 0
 
-			-- FLIGHT PHASE
 			local flightConn
 			flightConn = RunService.Heartbeat:Connect(function(dt2)
 				if not torso or not torso.Parent then
 					flightConn:Disconnect()
 					if stopTrail then stopTrail() end
-					if onComplete then onComplete() end
+					if leapTrack then pcall(function() leapTrack:Stop() leapTrack:Destroy() end) end
+					restoreAllMotors()
+					safeComplete()
 					return
 				end
 
 				flightElapsed = flightElapsed + dt2
 				local rawAlpha = math.clamp(flightElapsed / FLIGHT_TIME, 0, 1)
 
+				-- Eased alpha for movement arc
 				local alpha
 				if rawAlpha < SLOWDOWN_START then
 					alpha = (rawAlpha / SLOWDOWN_START) * SLOWDOWN_START
 				else
-					local slowT    = (rawAlpha - SLOWDOWN_START) / (1 - SLOWDOWN_START)
+					local slowT     = (rawAlpha - SLOWDOWN_START) / (1 - SLOWDOWN_START)
 					local easedSlow = 1 - (1 - slowT) * (1 - slowT)
 					alpha = SLOWDOWN_START + easedSlow * (1 - SLOWDOWN_START)
 				end
@@ -611,6 +704,29 @@ function Warrior.PlayLeapAnimation(
 				torso.CFrame = CFrame.new(newPos, newPos + dir)
 				updateCircles(newPos)
 
+				-- ── Animation freeze/unfreeze ──
+
+				-- FREEZE at 20% flight: hold frame 33
+				if leapTrack and not frozen and rawAlpha >= LEAP_FREEZE_ALPHA then
+					leapTrack.TimePosition = LEAP_HOLD_TIME
+					leapTrack:AdjustSpeed(0)
+					frozen = true
+				end
+
+				-- UNFREEZE at 75% flight: play frames 34-85 for descent + landing
+				if leapTrack and frozen and not unfrozen and rawAlpha >= LEAP_UNFREEZE_ALPHA then
+					local remainingFlightTime = FLIGHT_TIME * (1 - LEAP_UNFREEZE_ALPHA)
+					local landingAnimDuration = LEAP_ANIM_END_TIME - LEAP_LANDING_START_TIME
+					-- Speed calculated so frames 34-85 fill the remaining flight + linger
+					local landingRealTime = remainingFlightTime + LEAP_LANDING_LINGER
+					local landingSpeed    = landingAnimDuration / landingRealTime
+
+					leapTrack.TimePosition = LEAP_LANDING_START_TIME
+					leapTrack:AdjustSpeed(landingSpeed)
+					unfrozen = true
+				end
+
+				-- Motor6D adjustments during flight
 				if alpha < 0.5 then
 					local rise = alpha * 2
 					local rs2  = rise * rise * (3 - 2 * rise)
@@ -628,14 +744,16 @@ function Warrior.PlayLeapAnimation(
 					if nk and nkBase then nk.C0 = nkBase * CFrame.Angles(0.15 - 0.3 * fs, 0, 0) end
 				end
 
+				-- ── LANDING ──
 				if rawAlpha >= 1 then
 					flightConn:Disconnect()
 					if stopTrail then stopTrail() end
 
+					-- Reset leg motors (animation handles upper body from here)
 					if lh and lh.Parent and lhBase then lh.C0 = lhBase end
 					if rh and rh.Parent and rhBase then rh.C0 = rhBase end
 
-					-- Perform Leaping Slash on nearest enemy at landing site
+					-- Perform Leaping Slash at landing site
 					local slashTarget
 					if findNearestEnemyFn and enemiesFolder then
 						local nearest = findNearestEnemyFn(torso.Position, tower:GetAttribute("RNG") or 8, enemiesFolder)
@@ -647,25 +765,43 @@ function Warrior.PlayLeapAnimation(
 
 					Warrior.PerformLeapingSlash(tower, slashTarget, enemiesFolder, Warrior.StartLeapSlashCooldown)
 
-					-- Recovery animation
+					-- ── POST-LANDING: wait for animation to finish, then complete ──
 					task.spawn(function()
-						local recFrames = 8
-						local recTime   = 0.25
-						local recDt     = recTime / recFrames
-						local rsStart   = rs and rs.C0
-						local lsStart   = ls and ls.C0
-						local nkStart   = nk and nk.C0
-						for f = 1, recFrames do
-							local rt = f / recFrames
-							rt = rt * rt * (3 - 2 * rt)
-							if rs and rs.Parent and rsBase then rs.C0 = rsStart:Lerp(rsBase, rt) end
-							if ls and ls.Parent and lsBase then ls.C0 = lsStart:Lerp(lsBase, rt) end
-							if nk and nk.Parent and nkBase then nk.C0 = nkStart:Lerp(nkBase, rt) end
-							task.wait(recDt)
-						end
-					end)
+						if leapTrack then
+							-- Make sure the track is unfrozen
+							if not unfrozen then
+								leapTrack.TimePosition = LEAP_LANDING_START_TIME
+								leapTrack:AdjustSpeed(1)
+							end
 
-					if onComplete then onComplete() end
+							-- Wait for the landing animation to finish.
+							-- Use a timeout so we never hang forever.
+							local waitStart = tick()
+							local MAX_WAIT  = LEAP_LANDING_LINGER + 2.0  -- generous timeout
+
+							-- Wait for track to finish or timeout
+							while leapTrack and leapTrack.IsPlaying and (tick() - waitStart) < MAX_WAIT do
+								task.wait(0.05)
+							end
+
+							-- If the track is somehow still playing, force stop
+							pcall(function()
+								if leapTrack then
+									leapTrack:Stop(0.15)
+									leapTrack:Destroy()
+								end
+							end)
+						else
+							-- No animation track — just wait the linger time
+							task.wait(LEAP_LANDING_LINGER)
+						end
+
+						-- Restore all motor6D bases
+						restoreAllMotors()
+
+						-- Fire completion → TowerManager sets state to "Idle"
+						safeComplete()
+					end)
 				end
 			end)
 		end
@@ -676,7 +812,7 @@ end
 -- ATTACK ANIMATION  (Cleave – basic melee swing)
 -- ============================================================
 
-local attackAnimData = {}   -- tower -> { animating = false }
+local attackAnimData = {}
 
 function Warrior.PlayAttackAnimation(tower: Model, target: Model)
 	local torso = tower.PrimaryPart
@@ -689,7 +825,6 @@ function Warrior.PlayAttackAnimation(tower: Model, target: Model)
 	if d.animating then return end
 	d.animating = true
 
-	-- Face the target
 	local tp = target.PrimaryPart and target.PrimaryPart.Position
 	if tp then
 		local faceDir = Vector3.new(tp.X - torso.Position.X, 0, tp.Z - torso.Position.Z)
@@ -703,10 +838,10 @@ function Warrior.PlayAttackAnimation(tower: Model, target: Model)
 		if not animator then d.animating = false return end
 
 		local animObj = Instance.new("Animation")
-		animObj.AnimationId = "rbxassetid://100041859398995"
+		animObj.AnimationId = SWING_ANIM_ID
 
 		local track = animator:LoadAnimation(animObj)
-		animObj:Destroy()  -- No longer needed after loading
+		animObj:Destroy()
 
 		track.Priority = Enum.AnimationPriority.Action
 		track.Looped   = false
@@ -721,8 +856,8 @@ end
 -- WALK ANIMATION
 -- ============================================================
 
-local walkTracks = {}   -- model -> AnimationTrack
-local baseC0s    = {}   -- model -> { motorName -> C0 }
+local walkTracks = {}
+local baseC0s    = {}
 
 function Warrior.StoreBaseC0s(model: Model)
 	if baseC0s[model] then return end
@@ -756,7 +891,7 @@ function Warrior.StartWalk(model: Model)
 	if not walkAnimObj then
 		walkAnimObj = Instance.new("Animation")
 		walkAnimObj.Name        = "WalkAnim"
-		walkAnimObj.AnimationId = "rbxassetid://73323871613223"
+		walkAnimObj.AnimationId = WALK_ANIM_ID
 		walkAnimObj.Parent      = model
 	end
 

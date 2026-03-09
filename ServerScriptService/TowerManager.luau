@@ -17,7 +17,7 @@ local PathfindingModule = require(ReplicatedStorage:WaitForChild("PathfindingMod
 if not TowerStats then error("[TowerManager] Could not find TowerStats!") end
 
 -- Tower modules (one per tower type)
-local Warrior     = require(script.Parent:WaitForChild("Towers"):WaitForChild("Warrior", 10))
+local Warrior = require(script.Parent:WaitForChild("Towers"):WaitForChild("Warrior", 10))
 
 -- Enemy modules (needed to drive enemy-side attack behaviour from the AI loop)
 local BasicZombie = require(script.Parent:WaitForChild("Enemies"):WaitForChild("BasicZombie", 10))
