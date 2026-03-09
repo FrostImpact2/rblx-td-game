@@ -234,8 +234,6 @@ function Vitalist.UpdateChargeDisplay(tower: Model)
 	local charge   = tower:GetAttribute("Charge")   or 0
 	local protocol = tower:GetAttribute("Protocol") or "ATK"
 	local ratio    = math.clamp(charge / Vitalist.MAX_CHARGE, 0, 1)
-
-	data.fill.Size             = UDim2.new(ratio, 0, 1, 0)
 	data.fill.BackgroundColor3 = (protocol == "SUPP") and SUPP_COLOR or ATK_COLOR
 
 	if data.label then
@@ -920,11 +918,11 @@ function Vitalist.DoAttack(
 	local st = getAnimState(tower)
 	if st.reloading or st.bursting then return false end
 
-	local atk      = tower:GetAttribute("ATK")         or 12
-	local ap       = tower:GetAttribute("AP")           or 18
-	local multi    = tower:GetAttribute("DamageMulti")  or 1.0
-	local charge   = tower:GetAttribute("Charge")       or 0
-	local protocol = tower:GetAttribute("Protocol")     or "ATK"
+	local atk      = tower:GetAttribute("ATK")        or 12
+	local ap       = tower:GetAttribute("AP")          or 18
+	local multi    = tower:GetAttribute("DamageMulti") or 1.0
+	local charge   = tower:GetAttribute("Charge")      or 0
+	local protocol = tower:GetAttribute("Protocol")    or "ATK"
 
 	local isEnhanced = (charge >= Vitalist.MAX_CHARGE)
 	local beamColor  = (protocol == "SUPP") and SUPP_COLOR or ATK_COLOR

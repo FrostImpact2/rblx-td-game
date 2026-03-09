@@ -219,6 +219,8 @@ local function stopPlacing()
 end
 
 local function startPlacing(towerType: string)
+	-- If already placing the same tower type, pressing the key again cancels placement.
+	-- Otherwise (different type or not currently placing), switch to the new tower.
 	if placing and selectedTower == towerType then stopPlacing(); return end
 	selectedTower = towerType
 	placing = true; deselectTower(); createGhost()
