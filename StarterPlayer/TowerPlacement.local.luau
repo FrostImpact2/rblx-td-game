@@ -19,7 +19,7 @@ local towersFolder  = Workspace:WaitForChild("Towers", 15)
 local enemiesFolder = Workspace:WaitForChild("Enemies", 15)
 
 local placing = false
-local selectedTower = "Warrior"
+local selectedTower = "Deadeye"
 local selectedTowerModel: Model? = nil
 local canPlace = false
 
