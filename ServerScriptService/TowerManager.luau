@@ -17,10 +17,23 @@ local PathfindingModule = require(ReplicatedStorage:WaitForChild("PathfindingMod
 if not TowerStats then error("[TowerManager] Could not find TowerStats!") end
 
 -- Tower modules (one per tower type)
-local Warrior = require(script.Parent:WaitForChild("Towers"):WaitForChild("Warrior", 10))
+local Warrior  = require(script.Parent:WaitForChild("Towers"):WaitForChild("Warrior",  10))
+local Deadeye  = require(script.Parent:WaitForChild("Towers"):WaitForChild("Deadeye",  10))
 
 -- Enemy modules (needed to drive enemy-side attack behaviour from the AI loop)
 local BasicZombie = require(script.Parent:WaitForChild("Enemies"):WaitForChild("BasicZombie", 10))
+
+-- ============================================================
+-- TOWER-MODULE ROUTER
+-- ============================================================
+
+-- Returns the module that owns this tower (Warrior or Deadeye).
+local function getTowerModule(tower: Model)
+	if tower:GetAttribute("TowerType") == "Deadeye" then
+		return Deadeye
+	end
+	return Warrior
+end
 
 -- Workspace folders
 local towersFolder = Workspace:FindFirstChild("Towers")
@@ -294,8 +307,12 @@ local function moveTower(tower: Model, dest: Vector3)
 	local range    = tower:GetAttribute("RNG") or 8
 	local flatDist = (Vector3.new(dest.X, 0, dest.Z) - Vector3.new(startPos.X, 0, startPos.Z)).Magnitude
 
-	-- Relentless Advance: leap if within range and ability is off cooldown
-	if flatDist <= range * Warrior.LEAP_RANGE_MULT and Warrior.IsLeapSlashReady(tower) then
+	-- Relentless Advance: Warrior-only leap when within leap range and off cooldown
+	local towerType = tower:GetAttribute("TowerType") or "Warrior"
+	if towerType == "Warrior"
+		and flatDist <= range * Warrior.LEAP_RANGE_MULT
+		and Warrior.IsLeapSlashReady(tower)
+	then
 		Warrior.StopWalk(tower)
 		tower:SetAttribute("State", "Leaping")
 		Warrior.PlayLeapAnimation(tower, dest, function()
@@ -307,9 +324,11 @@ local function moveTower(tower: Model, dest: Vector3)
 		return
 	end
 
+	local mod = getTowerModule(tower)
+
 	-- Normal walk
 	tower:SetAttribute("State", "Moving")
-	Warrior.StartWalk(tower)
+	mod.StartWalk(tower)
 	moveIndicators[tower] = createMoveIndicator(dest)
 
 	local speed = tower:GetAttribute("MOVE_SPD") or 16
@@ -327,7 +346,7 @@ local function moveTower(tower: Model, dest: Vector3)
 		if dist < 0.5 then
 			conn:Disconnect(); activeMovements[tower] = nil
 			tower:SetAttribute("State", "Idle")
-			Warrior.StopWalk(tower)
+			mod.StopWalk(tower)
 			destroyMoveIndicator(tower)
 			updateCirclePositions(tower, cur)
 			return
@@ -353,9 +372,13 @@ end
 -- ============================================================
 
 local function onTowerPlaced(tower: Model)
+	-- Warrior-only: leap toward the nearest enemy on placement
+	if (tower:GetAttribute("TowerType") or "Warrior") ~= "Warrior" then return end
+
 	local torso = tower.PrimaryPart
 	if not torso then return end
 	local range   = tower:GetAttribute("RNG") or 8
+	-- Trigger Leaping Slash toward the nearest enemy on placement
 	local nearest = findNearestEnemy(torso.Position, range)
 	if nearest and nearest.PrimaryPart then
 		Warrior.PerformLeapingSlash(tower, nearest.PrimaryPart.Position, enemiesFolder, Warrior.StartLeapSlashCooldown)
@@ -369,14 +392,18 @@ end
 local activeTowers = {}  -- tower -> { lastAttackTime }
 
 local function registerTower(towerModel: Model)
-	Warrior.StoreBaseC0s(towerModel)
+	local mod = getTowerModule(towerModel)
+	mod.StoreBaseC0s(towerModel)
+	if towerModel:GetAttribute("TowerType") == "Deadeye" then
+		Deadeye.InitTower(towerModel)
+	end
 	activeTowers[towerModel] = { lastAttackTime = 0 }
 end
 
 RunService.Heartbeat:Connect(function()
 	local now = tick()
 
-	-- === TOWER COMBAT + SURVIVOR PASSIVE ===
+	-- === TOWER COMBAT ===
 	for tower, data in pairs(activeTowers) do
 		if not tower or not tower.Parent then
 			activeTowers[tower] = nil
@@ -384,20 +411,23 @@ RunService.Heartbeat:Connect(function()
 			continue
 		end
 
-		local state = tower:GetAttribute("State") or "Idle"
+		local state     = tower:GetAttribute("State")     or "Idle"
+		local towerType = tower:GetAttribute("TowerType") or "Warrior"
 
-		-- Survivor passive: heal out-of-combat
-		local hp          = tower:GetAttribute("HP") or 0
-		local maxHp       = tower:GetAttribute("MaxHP") or 1
-		local lastCombat  = tower:GetAttribute("LastCombatTime") or now
-		local lastHealTick = tower:GetAttribute("LastHealTick") or 0
+		-- ── Warrior-only: Survivor passive (out-of-combat healing) ──
+		if towerType == "Warrior" then
+			local hp           = tower:GetAttribute("HP")            or 0
+			local maxHp        = tower:GetAttribute("MaxHP")         or 1
+			local lastCombat   = tower:GetAttribute("LastCombatTime") or now
+			local lastHealTick = tower:GetAttribute("LastHealTick")  or 0
 
-		if hp > 0 and hp < maxHp and (now - lastCombat) >= Warrior.SURVIVOR_OOC_TIME then
-			if (now - lastHealTick) >= Warrior.SURVIVOR_HEAL_INTERVAL then
-				local heal = math.ceil(maxHp * Warrior.SURVIVOR_HEAL_PERCENT)
-				tower:SetAttribute("HP",          math.min(hp + heal, maxHp))
-				tower:SetAttribute("LastHealTick", now)
-				Warrior.SpawnHealParticles(tower)
+			if hp > 0 and hp < maxHp and (now - lastCombat) >= Warrior.SURVIVOR_OOC_TIME then
+				if (now - lastHealTick) >= Warrior.SURVIVOR_HEAL_INTERVAL then
+					local heal = math.ceil(maxHp * Warrior.SURVIVOR_HEAL_PERCENT)
+					tower:SetAttribute("HP",           math.min(hp + heal, maxHp))
+					tower:SetAttribute("LastHealTick", now)
+					Warrior.SpawnHealParticles(tower)
+				end
 			end
 		end
 
@@ -413,9 +443,14 @@ RunService.Heartbeat:Connect(function()
 			end
 		end
 
-		-- Find nearest target
+		-- Find nearest target in range
 		local target = findTarget(tower)
+
 		if not target then
+			-- ── Deadeye: tick animation state machine even with no target ──
+			if towerType == "Deadeye" then
+				Deadeye.UpdateCombatState(tower, false, nil)
+			end
 			tower:SetAttribute("State", "Idle")
 			continue
 		end
@@ -433,27 +468,47 @@ RunService.Heartbeat:Connect(function()
 			end
 		end
 
-		-- Cleave attack cooldown
-		local atkSpd  = tower:GetAttribute("ATK_SPD") or 1
-		if now - data.lastAttackTime < 1 / atkSpd then continue end
+		local atkSpd = tower:GetAttribute("ATK_SPD") or 1
 
-		tower:SetAttribute("State",          "Attacking")
-		tower:SetAttribute("LastCombatTime", now)
-		data.lastAttackTime = now
+		-- ══════════════════════════════════════════════════════
+		-- DEADEYE combat branch
+		-- ══════════════════════════════════════════════════════
+		if towerType == "Deadeye" then
+			-- Drive the gun-raise / gun-lower animation state machine
+			Deadeye.UpdateCombatState(tower, true, target)
 
-		local atk    = tower:GetAttribute("ATK") or 10
-		local multi  = tower:GetAttribute("DamageMulti") or 1.0
-		local damage = atk * multi
+			-- Only fire when the gun is fully raised and the raise-delay has elapsed
+			if not Deadeye.IsReadyToFire(tower) then continue end
+			if now - data.lastAttackTime < 1 / atkSpd then continue end
 
-		local enemyHP = target:GetAttribute("HP") or 0
-		target:SetAttribute("HP", enemyHP - damage)
-		Warrior.PlayAttackAnimation(tower, target)
+			tower:SetAttribute("State", "Attacking")
+			data.lastAttackTime = now
+			Deadeye.DoAttack(tower, target, enemiesFolder)
 
-		if target.PrimaryPart then
-			Warrior.SpawnHitParticles(target.PrimaryPart.Position, Color3.fromRGB(255, 80, 80))
+		-- ══════════════════════════════════════════════════════
+		-- WARRIOR (default) combat branch
+		-- ══════════════════════════════════════════════════════
+		else
+			if now - data.lastAttackTime < 1 / atkSpd then continue end
+
+			tower:SetAttribute("State",          "Attacking")
+			tower:SetAttribute("LastCombatTime", now)
+			data.lastAttackTime = now
+
+			local atk    = tower:GetAttribute("ATK") or 10
+			local multi  = tower:GetAttribute("DamageMulti") or 1.0
+			local damage = atk * multi
+
+			local enemyHP = target:GetAttribute("HP") or 0
+			target:SetAttribute("HP", enemyHP - damage)
+			Warrior.PlayAttackAnimation(tower, target)
+
+			if target.PrimaryPart then
+				Warrior.SpawnHitParticles(target.PrimaryPart.Position, Color3.fromRGB(255, 80, 80))
+			end
+
+			if (enemyHP - damage) <= 0 then target:Destroy() end
 		end
-
-		if (enemyHP - damage) <= 0 then target:Destroy() end
 	end
 
 	-- === SCAN FOR NEW AGGRO ===
@@ -507,8 +562,9 @@ RunService.Heartbeat:Connect(function()
 			if dir.Magnitude > 0.1 then
 				er.CFrame = CFrame.new(er.Position, er.Position + dir.Unit)
 			end
-			-- Delegate attack to the enemy module (BasicZombie handles timing + damage)
-			BasicZombie.AttackTower(enemy, tower, playEnemyPunchRemote, Warrior.SpawnHitParticles)
+			-- Delegate attack to the enemy module; use the tower's own hit particles
+			local mod = getTowerModule(tower)
+			BasicZombie.AttackTower(enemy, tower, playEnemyPunchRemote, mod.SpawnHitParticles)
 		else
 			releaseAggro(tower)
 		end
@@ -541,7 +597,13 @@ placeRemote.OnServerEvent:Connect(function(player: Player, templateName: string,
 	if type(templateName)  ~= "string"  then return end
 	if not TowerStats.Templates[templateName] then return end
 
-	local towerModel = Warrior.CreateModel(position, TowerStats, Warrior.LEAP_RANGE_MULT, Warrior.LEAP_SLASH_COOLDOWN)
+	local towerModel
+	if templateName == "Deadeye" then
+		towerModel = Deadeye.CreateModel(position, TowerStats)
+	else
+		towerModel = Warrior.CreateModel(position, TowerStats, Warrior.LEAP_RANGE_MULT, Warrior.LEAP_SLASH_COOLDOWN)
+	end
+
 	if towerModel then
 		towerModel.Parent = towersFolder
 		towerModel:SetAttribute("Owner", player.Name)
@@ -562,7 +624,7 @@ end)
 
 towersFolder.ChildRemoved:Connect(function(child)
 	activeTowers[child] = nil
-	Warrior.CleanupTower(child)
+	getTowerModule(child).CleanupTower(child)
 	releaseAggro(child)
 	if activeMovements[child] then
 		activeMovements[child]:Disconnect()
