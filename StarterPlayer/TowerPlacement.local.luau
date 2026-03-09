@@ -32,12 +32,19 @@ local updateConnection: RBXScriptConnection? = nil
 local towerHpGuis = {}
 local towerBarAttachments = {}
 
-local PLACE_KEY = Enum.KeyCode.T
+local PLACE_KEY_DEADEYE  = Enum.KeyCode.T   -- T → place Deadeye
+local PLACE_KEY_VITALIST = Enum.KeyCode.Y   -- Y → place Vitalist
 local GHOST_TRANSPARENCY = 0.5
 local VALID_COLOR   = Color3.fromRGB(100, 255, 100)
 local INVALID_COLOR = Color3.fromRGB(255, 80, 80)
-local RANGE_STUDS   = 8
 local HP_BAR_GAP    = 1.5
+
+-- Per-tower range studs for the ghost preview circle
+local TOWER_RANGE_STUDS = {
+	Warrior  = 8,
+	Deadeye  = 30,
+	Vitalist = 20,
+}
 
 -- ============================================================
 -- MOUSE POSITION
@@ -117,9 +124,10 @@ local function createGhost()
 		table.insert(ghostParts, { part = p, offset = def[3] })
 	end
 
+	local rangeStuds = TOWER_RANGE_STUDS[selectedTower] or 8
 	local range = Instance.new("Part")
 	range.Name = "RangePreview"; range.Shape = Enum.PartType.Cylinder
-	range.Size = Vector3.new(0.15, RANGE_STUDS * 2, RANGE_STUDS * 2)
+	range.Size = Vector3.new(0.15, rangeStuds * 2, rangeStuds * 2)
 	range.Color = Color3.fromRGB(100, 200, 100); range.Transparency = 0.7
 	range.Anchored = true; range.CanCollide = false
 	range.Material = Enum.Material.SmoothPlastic
@@ -210,8 +218,9 @@ local function stopPlacing()
 	if updateConnection then updateConnection:Disconnect(); updateConnection = nil end
 end
 
-local function startPlacing()
-	if placing then return end
+local function startPlacing(towerType: string)
+	if placing and selectedTower == towerType then stopPlacing(); return end
+	selectedTower = towerType
 	placing = true; deselectTower(); createGhost()
 	updateConnection = RunService.RenderStepped:Connect(function()
 		if placing then updateGhostPosition() end
@@ -601,8 +610,10 @@ end)
 
 UserInputService.InputBegan:Connect(function(input, processed)
 	if processed then return end
-	if input.KeyCode == PLACE_KEY then
-		if placing then stopPlacing() else startPlacing() end
+	if input.KeyCode == PLACE_KEY_DEADEYE then
+		startPlacing("Deadeye")
+	elseif input.KeyCode == PLACE_KEY_VITALIST then
+		startPlacing("Vitalist")
 	end
 end)
 

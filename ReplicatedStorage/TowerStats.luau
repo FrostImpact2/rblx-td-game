@@ -36,6 +36,21 @@ TowerStats.Templates = {
 		AttackDesc   = "Shoot the enemy, dealing 1× ATK to a single target. Enhances basic attack after 2 usages.",
 		DamageMulti  = 1.0,
 	},
+
+	Vitalist = {
+		ATK      = 12,    -- basic attack; each bullet does 0.125× ATK
+		AP       = 18,    -- ability power; Nano Blast deals/heals 2× AP
+		ATK_SPD  = 1.2,   -- burst attacks per second
+		RNG      = 20,    -- attack range in studs
+		HP       = 85,
+		MOVE_SPD = 14,
+
+		-- Attack info
+		AttackType   = "Hybrid",
+		AttackName   = "C-310 MENDOR",
+		AttackDesc   = "Fires 8-bullet bursts (0.125× ATK each). ATK: damages enemy. SUPP: heals ally tower. At 40 charge: Nano Blast (2× AP laser).",
+		DamageMulti  = 1.0,
+	},
 }
 
 return TowerStats

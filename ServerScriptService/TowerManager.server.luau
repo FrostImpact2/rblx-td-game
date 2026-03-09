@@ -5,6 +5,7 @@
 	Coordinates tower placement, targeting, combat AI, aggro, and movement.
 	  - Warrior-specific logic is delegated to Towers/Warrior.luau
 	  - Deadeye-specific logic is delegated to Towers/Deadeye.luau
+	  - Vitalist-specific logic is delegated to Towers/Vitalist.luau
 	  - Enemy attack behaviour is delegated to Enemies/BasicZombie.luau
 ]]
 
@@ -21,8 +22,9 @@ local PathfindingModule = require(ReplicatedStorage:WaitForChild("PathfindingMod
 if not TowerStats then error("[TowerManager] Could not find TowerStats!") end
 
 -- Tower modules
-local Warrior     = require(script.Parent:WaitForChild("Towers"):WaitForChild("Warrior",  10))
-local Deadeye     = require(script.Parent:WaitForChild("Towers"):WaitForChild("Deadeye",  10))
+local Warrior   = require(script.Parent:WaitForChild("Towers"):WaitForChild("Warrior",   10))
+local Deadeye   = require(script.Parent:WaitForChild("Towers"):WaitForChild("Deadeye",   10))
+local Vitalist  = require(script.Parent:WaitForChild("Towers"):WaitForChild("Vitalist",  10))
 
 -- Enemy modules
 local BasicZombie = require(script.Parent:WaitForChild("Enemies"):WaitForChild("BasicZombie", 10))
@@ -32,9 +34,9 @@ local BasicZombie = require(script.Parent:WaitForChild("Enemies"):WaitForChild("
 -- ============================================================
 
 local function getTowerModule(tower: Model)
-	if tower:GetAttribute("TowerType") == "Deadeye" then
-		return Deadeye
-	end
+	local tt = tower:GetAttribute("TowerType")
+	if tt == "Deadeye"  then return Deadeye  end
+	if tt == "Vitalist" then return Vitalist end
 	return Warrior
 end
 
@@ -277,6 +279,34 @@ end
 local hhLockedTarget = {}   -- tower -> Model
 
 -- ============================================================
+-- VITALIST ALLY-HEAL TARGET HELPER
+-- Finds the nearest ally tower (lowest HP ratio) in range.
+-- ============================================================
+
+local function findAllyToHeal(tower: Model): Model?
+	local torso = tower.PrimaryPart
+	if not torso then return nil end
+	local pos   = torso.Position
+	local range = tower:GetAttribute("RNG") or 20
+	local best, bestRatio = nil, math.huge
+	for _, t in ipairs(towersFolder:GetChildren()) do
+		if t:IsA("Model") and t ~= tower and t.PrimaryPart then
+			local hp    = t:GetAttribute("HP")    or 0
+			local maxHP = t:GetAttribute("MaxHP") or 1
+			local d     = (t.PrimaryPart.Position - pos).Magnitude
+			if d <= range and hp > 0 then
+				local ratio = hp / maxHP
+				if ratio < bestRatio then
+					bestRatio = ratio
+					best      = t
+				end
+			end
+		end
+	end
+	return best
+end
+
+-- ============================================================
 -- CIRCLE POSITION HELPER
 -- ============================================================
 
@@ -353,6 +383,11 @@ local function moveTower(tower: Model, dest: Vector3)
 		return
 	end
 
+	-- Vitalist: if destination is within protocol-switch range, toggle protocol
+	if towerType == "Vitalist" and flatDist <= Vitalist.PROTOCOL_SWITCH_RANGE then
+		task.spawn(function() Vitalist.TriggerProtocolSwitch(tower) end)
+	end
+
 	local mod = getTowerModule(tower)
 	tower:SetAttribute("State", "Moving")
 	mod.StartWalk(tower)
@@ -418,8 +453,11 @@ local activeTowers = {}  -- tower -> { lastAttackTime }
 local function registerTower(towerModel: Model)
 	local mod = getTowerModule(towerModel)
 	mod.StoreBaseC0s(towerModel)
-	if towerModel:GetAttribute("TowerType") == "Deadeye" then
+	local tt = towerModel:GetAttribute("TowerType")
+	if tt == "Deadeye" then
 		Deadeye.InitTower(towerModel)
+	elseif tt == "Vitalist" then
+		Vitalist.InitTower(towerModel)
 	end
 	activeTowers[towerModel] = { lastAttackTime = 0 }
 end
@@ -470,6 +508,51 @@ RunService.Heartbeat:Connect(function()
 
 		-- Find nearest target in range
 		local target = findTarget(tower)
+
+		-- ══════════════════════════════════════════════════════
+		-- VITALIST combat branch (handles both SUPP and ATK)
+		-- Vitalist in SUPP mode doesn't need an enemy target.
+		-- ══════════════════════════════════════════════════════
+		if towerType == "Vitalist" then
+			local protocol = tower:GetAttribute("Protocol") or "ATK"
+			local atkSpd   = tower:GetAttribute("ATK_SPD")  or 1
+
+			if protocol == "SUPP" then
+				-- SUPP mode: heal the nearest injured ally tower
+				local healTarget = findAllyToHeal(tower)
+				if healTarget then
+					Vitalist.UpdateCombatState(tower, true, healTarget)
+					if Vitalist.IsReadyToFire(tower)
+						and (now - data.lastAttackTime) >= 1 / atkSpd
+					then
+						tower:SetAttribute("State", "Attacking")
+						data.lastAttackTime = now
+						Vitalist.DoAttack(tower, healTarget, enemiesFolder, towersFolder)
+					end
+				else
+					Vitalist.UpdateCombatState(tower, false, nil)
+					tower:SetAttribute("State", "Idle")
+				end
+				continue
+			else
+				-- ATK mode: attack the nearest enemy
+				if not target then
+					Vitalist.UpdateCombatState(tower, false, nil)
+					tower:SetAttribute("State", "Idle")
+					continue
+				end
+
+				Vitalist.UpdateCombatState(tower, true, target)
+				if Vitalist.IsReadyToFire(tower)
+					and (now - data.lastAttackTime) >= 1 / atkSpd
+				then
+					tower:SetAttribute("State", "Attacking")
+					data.lastAttackTime = now
+					Vitalist.DoAttack(tower, target, enemiesFolder, towersFolder)
+				end
+				continue
+			end
+		end
 
 		if not target then
 			-- No target: clear locked HH target and tick Deadeye animation
@@ -663,6 +746,8 @@ placeRemote.OnServerEvent:Connect(function(player: Player, templateName: string,
 	local towerModel
 	if templateName == "Deadeye" then
 		towerModel = Deadeye.CreateModel(position, TowerStats)
+	elseif templateName == "Vitalist" then
+		towerModel = Vitalist.CreateModel(position, TowerStats)
 	else
 		towerModel = Warrior.CreateModel(position, TowerStats, Warrior.LEAP_RANGE_MULT, Warrior.LEAP_SLASH_COOLDOWN)
 	end
