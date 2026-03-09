@@ -485,6 +485,7 @@ local function triggerGunRaise(tower: Model, st)
 
 		st.gunState        = "raised"
 		st.readyToFireTime = tick() + Deadeye.GUN_RAISE_DELAY
+		st.lastShotTime    = tick()   -- reset gun-lower countdown so it doesn't immediately fire
 
 		-- 0.15 s lock-on pause before entering shoot_hold
 		task.wait(Deadeye.GUN_RAISE_DELAY)
@@ -648,8 +649,8 @@ function Deadeye.UpdateCombatState(tower: Model, hasTarget: boolean, target: Mod
 			triggerGunRaise(tower, st)
 		end
 
-		-- While raised / shoot_hold: keep facing the target
-		if st.gunState == "raised" or st.gunState == "shoot_hold" then
+		-- While raising / raised / shoot_hold: keep facing the target
+		if st.gunState == "raising" or st.gunState == "raised" or st.gunState == "shoot_hold" then
 			local torso       = tower.PrimaryPart
 			local targetTorso = target.PrimaryPart
 			if torso and targetTorso then
