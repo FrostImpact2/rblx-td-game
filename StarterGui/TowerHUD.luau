@@ -1,4 +1,4 @@
-
+	
 
 local Players          = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -189,4 +189,3 @@ descLabel.TextWrapped      = true
 descLabel.TextXAlignment   = Enum.TextXAlignment.Left
 descLabel.TextYAlignment   = Enum.TextYAlignment.Top
 descLabel.Parent           = card
-ww

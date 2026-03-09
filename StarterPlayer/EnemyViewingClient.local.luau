@@ -324,7 +324,7 @@ local function getEnemyFromPart(part: Instance): Model?
 	if not part then return nil end
 
 	local current = part
-	while current and current ~= Workspace do
+	while current and current ~= workspace do
 		if current.Parent == enemiesFolder then
 			return current :: Model
 		end
