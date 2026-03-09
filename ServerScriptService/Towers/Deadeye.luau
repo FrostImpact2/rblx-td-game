@@ -14,7 +14,7 @@
 
 	Animation state machine
 	  idle  →  raising  →  shoot_hold  →  (lowering after 3 s no shot)  →  idle
-	  shoot_hold  →  reloading  →  shoot_hold  (after enhanced shot)
+	  shoot_hold  →  (Headhunter fires, full anim plays)  →  reloading  →  shoot_hold
 	  Any state  →  walking  (on player-initiated move)
 	  walking  →  idle  (on arrival)
 
@@ -27,17 +27,25 @@
 	  Gun Lower : 107226036750887  (one-shot, Action priority)
 	  Reload    : 134398343804499  (one-shot, Action priority)
 
-	Bullet display
-	  3 bullet icons float above the tower's head.
-	  Bullets 1 & 2 are gold  → grey when spent.
-	  Bullet  3 is glowing    → grey when spent.
-	  After the enhanced shot fires all three become grey and the reload
-	  animation plays before the display resets.
+	Bullet display (IMAGE-BASED)
+	  Requires: ReplicatedStorage > DeadeyeAssets > BulletIcons
+	  Contains three Decal objects:
+	    • BulletActive  – gold/brass bullet image
+	    • BulletGlow    – glowing bullet image (3rd slot)
+	    • BulletSpent   – dark grey spent casing image
+	  Falls back to coloured ImageLabels if folder is missing.
+
+	Bullet icons float above the tower's head.
+	  Slot 1 & 2 show BulletActive → BulletSpent when fired.
+	  Slot 3 shows BulletGlow    → BulletSpent when fired.
+	  After Headhunter fires: full recoil animation plays first,
+	  then all three go grey and the reload animation runs.
 ]]
 
-local TweenService  = game:GetService("TweenService")
-local Workspace     = game:GetService("Workspace")
-local ServerStorage = game:GetService("ServerStorage")
+local TweenService      = game:GetService("TweenService")
+local Workspace         = game:GetService("Workspace")
+local ServerStorage     = game:GetService("ServerStorage")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Deadeye = {}
 
@@ -45,12 +53,13 @@ local Deadeye = {}
 -- CONSTANTS
 -- ============================================================
 
-Deadeye.ENHANCE_AFTER        = 2      -- basic attacks before enhanced fires
-Deadeye.EXECUTE_HP_THRESHOLD = 0.25   -- execute if enemy HP < 25 % of MaxHP
-Deadeye.EXECUTE_DMG_CAP_MULT = 2.0    -- execute only if enemy HP <= 2 × AP
-Deadeye.GUN_RAISE_DELAY      = 0.15   -- seconds after raise finishes before first shot
-Deadeye.GUN_LOWER_DELAY      = 3.0    -- seconds without a shot → lower gun
-Deadeye.BULLET_SPEED         = 180    -- studs / second
+Deadeye.ENHANCE_AFTER          = 2      -- basic attacks before enhanced fires
+Deadeye.EXECUTE_HP_THRESHOLD   = 0.25   -- execute if enemy HP < 25 % of MaxHP
+Deadeye.EXECUTE_DMG_CAP_MULT   = 2.0    -- execute only if enemy HP <= 2 × AP
+Deadeye.GUN_RAISE_DELAY        = 0.15   -- seconds after raise finishes before first shot
+Deadeye.GUN_LOWER_DELAY        = 3.0    -- seconds without a shot → lower gun
+Deadeye.BULLET_SPEED           = 180    -- studs / second
+Deadeye.HEADHUNTER_AIM_TIME    = 0.65   -- ← seconds Headhunter holds the laser before firing
 
 -- ====== ANIMATION IDs ======
 local IDLE_ANIM_ID     = "rbxassetid://130403916615858"
@@ -61,12 +70,10 @@ local SHOOT_ANIM_ID    = "rbxassetid://108396781520756"
 local LOWER_ANIM_ID    = "rbxassetid://107226036750887"
 local RELOAD_ANIM_ID   = "rbxassetid://134398343804499"
 
--- ====== BULLET DISPLAY COLOURS ======
-local BULLET_ACTIVE_COLOR = Color3.fromRGB(220, 175, 50)
-local BULLET_GLOW_COLOR   = Color3.fromRGB(255, 210, 0)
-local BULLET_GLOW_STROKE  = Color3.fromRGB(255, 240, 120)
-local BULLET_SPENT_COLOR  = Color3.fromRGB(75,  75,  75)
-local BULLET_SPENT_STROKE = Color3.fromRGB(55,  55,  55)
+-- ====== FALLBACK BULLET COLOURS (used if image folder is absent) ======
+local FB_ACTIVE_COLOR = Color3.fromRGB(220, 175, 50)
+local FB_GLOW_COLOR   = Color3.fromRGB(255, 210, 0)
+local FB_SPENT_COLOR  = Color3.fromRGB(75,  75,  75)
 
 -- ============================================================
 -- INTERNAL STATE
@@ -75,9 +82,9 @@ local BULLET_SPENT_STROKE = Color3.fromRGB(55,  55,  55)
 local animState  = {}   -- tower → animation-state record
 local baseC0s    = {}   -- tower → stored Motor6D C0 values
 local walkTracks = {}   -- tower → active walk AnimationTrack
-local bulletGuis = {}   -- tower → { billboard, bullets[] }
+local bulletGuis = {}   -- tower → { billboard, labels[], usingImages }
 
-local headhunterAimStart = {}  -- tower → tick() when Headhunter lock-on began
+local headhunterAimStart = {}  -- tower → tick() when lock-on began
 local aimBeams           = {}  -- tower → aim-laser data
 
 -- ============================================================
@@ -148,29 +155,71 @@ end
 local function getAnimState(tower: Model)
 	if not animState[tower] then
 		animState[tower] = {
-			-- "idle" | "raising" | "raised" | "shoot_hold" | "lowering" | "walking"
+			-- "idle"|"raising"|"raised"|"shoot_hold"|"lowering"|"walking"
 			gunState     = "idle",
 
 			idleTrack    = nil,
 			raiseTrack   = nil,
-			aimIdleTrack = nil,   -- looped aim-idle; holds raised pose
-			shootTrack   = nil,   -- one-shot recoil burst
+			aimIdleTrack = nil,
+			shootTrack   = nil,
 			lowerTrack   = nil,
 			reloadTrack  = nil,
 
-			reloading         = false,
-			lastShotTime      = -math.huge,
-			readyToFireTime   = 0,
+			reloading       = false,
+			lastShotTime    = -math.huge,
+			readyToFireTime = 0,
 		}
 	end
 	return animState[tower]
 end
 
 -- ============================================================
+-- BULLET IMAGE LOADER
+-- ============================================================
+
+
+local function getBulletImages(): { active: string, glow: string, spent: string }?
+	-- Always re-check; don't permanently cache failures
+	local assets = ReplicatedStorage:FindFirstChild("DeadeyeAssets")
+	local icons  = assets and assets:FindFirstChild("BulletIcons")
+	if not icons then
+		warn("[Deadeye] ReplicatedStorage.DeadeyeAssets.BulletIcons not found")
+		return nil
+	end
+
+	local dActive = icons:FindFirstChild("BulletActive")
+	local dGlow   = icons:FindFirstChild("BulletGlow")
+	local dUsed   = icons:FindFirstChild("BulletUsed")
+
+	if not dActive or not dGlow or not dUsed then
+		warn("[Deadeye] Missing Decal(s) in BulletIcons – found:",
+			dActive and "BulletActive" or "MISSING BulletActive",
+			dGlow   and "BulletGlow"   or "MISSING BulletGlow",
+			dUsed   and "BulletUsed"   or "MISSING BulletUsed"
+		)
+		return nil
+	end
+
+	local tActive = dActive.Texture
+	local tGlow   = dGlow.Texture
+	local tUsed   = dUsed.Texture
+
+	if tActive == "" or tGlow == "" or tUsed == "" then
+		warn("[Deadeye] One or more BulletIcons Decals has an empty Texture –",
+			"BulletActive:", tActive,
+			"BulletGlow:", tGlow,
+			"BulletUsed:", tUsed
+		)
+		return nil
+	end
+
+	return { active = tActive, glow = tGlow, spent = tUsed }
+end
+
+-- ============================================================
 -- BULLET DISPLAY
 -- ============================================================
 
--- Build the BillboardGui with 3 bullet icons above the tower's head.
 function Deadeye.CreateBulletDisplay(tower: Model)
 	if bulletGuis[tower] then return end
 
@@ -179,7 +228,7 @@ function Deadeye.CreateBulletDisplay(tower: Model)
 
 	local billboard = Instance.new("BillboardGui")
 	billboard.Name           = "BulletDisplay"
-	billboard.Size           = UDim2.new(0, 56, 0, 22)
+	billboard.Size           = UDim2.new(0, 62, 0, 24)
 	billboard.StudsOffset    = Vector3.new(0, 3.8, 0)
 	billboard.AlwaysOnTop    = false
 	billboard.ResetOnSpawn   = false
@@ -198,93 +247,90 @@ function Deadeye.CreateBulletDisplay(tower: Model)
 	layout.Padding             = UDim.new(0, 5)
 	layout.Parent              = container
 
-	local bullets = {}
+	local imgs        = getBulletImages()
+	local usingImages = imgs ~= nil
+
+	local labels = {}
 	for i = 1, 3 do
-		local wrapper = Instance.new("Frame")
-		wrapper.Name                    = "Bullet" .. i
-		wrapper.Size                    = UDim2.new(0, 9, 0, 20)
-		wrapper.BackgroundTransparency  = 1
-		wrapper.Parent                  = container
+		if usingImages then
+			-- ── Image-based bullet ──
+			local img = Instance.new("ImageLabel")
+			img.Name                    = "Bullet" .. i
+			img.Size                    = UDim2.new(0, 14, 0, 22)
+			img.BackgroundTransparency  = 1
+			img.ScaleType               = Enum.ScaleType.Fit
+			img.Image                   = (i == 3) and imgs.glow or imgs.active
+			img.Parent                  = container
+			labels[i]                   = img
+		else
+			-- ── Fallback: coloured shape ──
+			local wrapper = Instance.new("Frame")
+			wrapper.Name                    = "Bullet" .. i
+			wrapper.Size                    = UDim2.new(0, 9, 0, 20)
+			wrapper.BackgroundTransparency  = 1
+			wrapper.Parent                  = container
 
-		-- Bullet body (lower 70 %)
-		local body = Instance.new("Frame")
-		body.Name             = "Body"
-		body.Size             = UDim2.new(1, 0, 0.70, 0)
-		body.Position         = UDim2.new(0, 0, 0.30, 0)
-		body.BorderSizePixel  = 0
-		body.BackgroundColor3 = (i == 3) and BULLET_GLOW_COLOR or BULLET_ACTIVE_COLOR
-		local bodyCorner = Instance.new("UICorner")
-		bodyCorner.CornerRadius = UDim.new(0.18, 0)
-		bodyCorner.Parent = body
-		body.Parent = wrapper
+			local body = Instance.new("Frame")
+			body.Name             = "Body"
+			body.Size             = UDim2.new(1, 0, 0.70, 0)
+			body.Position         = UDim2.new(0, 0, 0.30, 0)
+			body.BorderSizePixel  = 0
+			body.BackgroundColor3 = (i == 3) and FB_GLOW_COLOR or FB_ACTIVE_COLOR
+			local bc = Instance.new("UICorner")
+			bc.CornerRadius = UDim.new(0.18, 0)
+			bc.Parent = body
+			body.Parent = wrapper
 
-		-- Bullet tip (upper 38 %, narrower, fully rounded)
-		local tip = Instance.new("Frame")
-		tip.Name             = "Tip"
-		tip.Size             = UDim2.new(0.7, 0, 0.38, 0)
-		tip.Position         = UDim2.new(0.15, 0, 0, 0)
-		tip.BorderSizePixel  = 0
-		tip.BackgroundColor3 = (i == 3) and BULLET_GLOW_COLOR or BULLET_ACTIVE_COLOR
-		local tipCorner = Instance.new("UICorner")
-		tipCorner.CornerRadius = UDim.new(0.5, 0)
-		tipCorner.Parent = tip
-		tip.Parent = wrapper
+			local tip = Instance.new("Frame")
+			tip.Name             = "Tip"
+			tip.Size             = UDim2.new(0.7, 0, 0.38, 0)
+			tip.Position         = UDim2.new(0.15, 0, 0, 0)
+			tip.BorderSizePixel  = 0
+			tip.BackgroundColor3 = (i == 3) and FB_GLOW_COLOR or FB_ACTIVE_COLOR
+			local tc = Instance.new("UICorner")
+			tc.CornerRadius = UDim.new(0.5, 0)
+			tc.Parent = tip
+			tip.Parent = wrapper
 
-		-- Glow stroke on bullet 3 only
-		if i == 3 then
-			local strokeBody = Instance.new("UIStroke")
-			strokeBody.Name      = "GlowStroke"
-			strokeBody.Color     = BULLET_GLOW_STROKE
-			strokeBody.Thickness = 1.5
-			strokeBody.Parent    = body
-
-			local strokeTip = Instance.new("UIStroke")
-			strokeTip.Name      = "GlowStroke"
-			strokeTip.Color     = BULLET_GLOW_STROKE
-			strokeTip.Thickness = 1.5
-			strokeTip.Parent    = tip
+			labels[i] = wrapper
 		end
-
-		bullets[i] = wrapper
 	end
 
-	bulletGuis[tower] = { billboard = billboard, bullets = bullets }
+	bulletGuis[tower] = { billboard = billboard, labels = labels, usingImages = usingImages }
 end
 
--- Refresh bullet colours.
+-- Refresh bullet state.
 --   count     : current BasicAttackCount (0, 1, or 2)
 --   reloading : true while the reload animation is playing
 function Deadeye.UpdateBulletDisplay(tower: Model, count: number, reloading: boolean)
 	local data = bulletGuis[tower]
 	if not data then return end
 
-	for i, wrapper in ipairs(data.bullets) do
-		local spent = reloading or (i <= count)
-		local body  = wrapper:FindFirstChild("Body")
-		local tip   = wrapper:FindFirstChild("Tip")
-		if not body or not tip then continue end
+	local imgs = data.usingImages and getBulletImages()
 
-		if spent then
-			body.BackgroundColor3 = BULLET_SPENT_COLOR
-			tip.BackgroundColor3  = BULLET_SPENT_COLOR
-			local bs = body:FindFirstChild("GlowStroke")
-			local ts = tip:FindFirstChild("GlowStroke")
-			if bs then bs.Color = BULLET_SPENT_STROKE end
-			if ts then ts.Color = BULLET_SPENT_STROKE end
+	for i, elem in ipairs(data.labels) do
+		local spent = reloading or (i <= count)
+
+		if data.usingImages and imgs then
+			-- ImageLabel path
+			(elem :: ImageLabel).Image = spent and imgs.spent
+				or ((i == 3) and imgs.glow or imgs.active)
 		else
-			local col = (i == 3) and BULLET_GLOW_COLOR or BULLET_ACTIVE_COLOR
+			-- Fallback coloured-shape path
+			local body = elem:FindFirstChild("Body")
+			local tip  = elem:FindFirstChild("Tip")
+			if not body or not tip then continue end
+			local col = spent and FB_SPENT_COLOR
+				or ((i == 3) and FB_GLOW_COLOR or FB_ACTIVE_COLOR)
 			body.BackgroundColor3 = col
 			tip.BackgroundColor3  = col
-			local bs = body:FindFirstChild("GlowStroke")
-			local ts = tip:FindFirstChild("GlowStroke")
-			if bs then bs.Color = BULLET_GLOW_STROKE end
-			if ts then ts.Color = BULLET_GLOW_STROKE end
 		end
 	end
 end
 
+
 -- ============================================================
--- VFX – BULLET WITH TRAIL
+-- VFX – NORMAL BULLET WITH TRAIL
 -- ============================================================
 
 function Deadeye.SpawnBullet(fromPos: Vector3, toPos: Vector3, isEnhanced: boolean?)
@@ -293,9 +339,14 @@ function Deadeye.SpawnBullet(fromPos: Vector3, toPos: Vector3, isEnhanced: boole
 	if dist < 0.1 then return end
 	dir = dir.Unit
 
+	-- Enhanced bullet is larger and brighter
+	local bulletSize = isEnhanced
+		and Vector3.new(0.14, 0.14, 0.75)
+		or  Vector3.new(0.1,  0.1,  0.55)
+
 	local bullet = Instance.new("Part")
 	bullet.Name       = "DeadeyeBullet"
-	bullet.Size       = Vector3.new(0.1, 0.1, 0.55)
+	bullet.Size       = bulletSize
 	bullet.Color      = isEnhanced
 		and Color3.fromRGB(255, 210, 60)
 		or  Color3.fromRGB(255, 245, 200)
@@ -306,18 +357,26 @@ function Deadeye.SpawnBullet(fromPos: Vector3, toPos: Vector3, isEnhanced: boole
 	bullet.CFrame     = CFrame.new(fromPos, toPos)
 	bullet.Parent     = Workspace
 
+	if isEnhanced then
+		local light = Instance.new("PointLight")
+		light.Brightness = 4
+		light.Color      = Color3.fromRGB(255, 200, 60)
+		light.Range      = 10
+		light.Parent     = bullet
+	end
+
 	local attFront = Instance.new("Attachment")
-	attFront.Position = Vector3.new(0, 0,  0.28)
+	attFront.Position = Vector3.new(0, 0, bulletSize.Z / 2)
 	attFront.Parent   = bullet
 
 	local attBack = Instance.new("Attachment")
-	attBack.Position = Vector3.new(0, 0, -0.28)
+	attBack.Position = Vector3.new(0, 0, -(bulletSize.Z / 2))
 	attBack.Parent   = bullet
 
 	local trail = Instance.new("Trail")
 	trail.Attachment0 = attFront
 	trail.Attachment1 = attBack
-	trail.Lifetime    = 0.07
+	trail.Lifetime    = isEnhanced and 0.12 or 0.07
 	trail.MinLength   = 0
 	trail.FaceCamera  = true
 	trail.Color = ColorSequence.new({
@@ -333,8 +392,8 @@ function Deadeye.SpawnBullet(fromPos: Vector3, toPos: Vector3, isEnhanced: boole
 		NumberSequenceKeypoint.new(1,   1.0),
 	})
 	trail.WidthScale = NumberSequence.new({
-		NumberSequenceKeypoint.new(0,   1),
-		NumberSequenceKeypoint.new(0.5, 0.5),
+		NumberSequenceKeypoint.new(0,   isEnhanced and 1.4 or 1),
+		NumberSequenceKeypoint.new(0.5, isEnhanced and 0.7 or 0.5),
 		NumberSequenceKeypoint.new(1,   0),
 	})
 	trail.Parent = bullet
@@ -347,14 +406,91 @@ function Deadeye.SpawnBullet(fromPos: Vector3, toPos: Vector3, isEnhanced: boole
 	)
 	tween:Play()
 	tween.Completed:Connect(function()
-		task.delay(0.12, function()
+		task.delay(0.14, function()
 			if bullet and bullet.Parent then bullet:Destroy() end
 		end)
 	end)
 end
 
 -- ============================================================
--- VFX – HIT PARTICLES
+-- VFX – BARREL MUZZLE FLASH  (called on every shot)
+-- ============================================================
+
+function Deadeye.SpawnBarrelFlash(position: Vector3, isEnhanced: boolean?)
+	local anchor = Instance.new("Part")
+	anchor.Name         = "MuzzleFlash"
+	anchor.Size         = Vector3.new(0.05, 0.05, 0.05)
+	anchor.Transparency = 1
+	anchor.Anchored     = true
+	anchor.CanCollide   = false
+	anchor.CastShadow   = false
+	anchor.Position     = position
+	anchor.Parent       = Workspace
+
+	local att = Instance.new("Attachment")
+	att.Parent = anchor
+
+	-- Burst of flash particles
+	local flash = Instance.new("ParticleEmitter")
+	flash.Color = ColorSequence.new(
+		isEnhanced
+			and Color3.fromRGB(255, 200, 60)
+			or  Color3.fromRGB(255, 240, 160)
+	)
+	flash.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0,   isEnhanced and 0.55 or 0.28),
+		NumberSequenceKeypoint.new(0.4, isEnhanced and 0.28 or 0.14),
+		NumberSequenceKeypoint.new(1,   0),
+	})
+	flash.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	flash.Lifetime    = NumberRange.new(0.03, 0.09)
+	flash.Speed       = NumberRange.new(2, isEnhanced and 14 or 8)
+	flash.SpreadAngle = Vector2.new(50, 50)
+	flash.RotSpeed    = NumberRange.new(-180, 180)
+	flash.Rate        = 0
+	flash.Parent      = att
+	flash:Emit(isEnhanced and 10 or 5)
+
+	-- Smoke wisp
+	local smoke = Instance.new("ParticleEmitter")
+	smoke.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(200, 200, 200)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(100, 100, 100)),
+	})
+	smoke.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.08),
+		NumberSequenceKeypoint.new(1, 0.3),
+	})
+	smoke.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.5),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	smoke.Lifetime    = NumberRange.new(0.15, 0.3)
+	smoke.Speed       = NumberRange.new(1, 4)
+	smoke.SpreadAngle = Vector2.new(25, 25)
+	smoke.Rate        = 0
+	smoke.Parent      = att
+	smoke:Emit(3)
+
+	-- Point light pop
+	local light = Instance.new("PointLight")
+	light.Brightness = isEnhanced and 10 or 5
+	light.Color      = isEnhanced and Color3.fromRGB(255, 185, 50) or Color3.fromRGB(255, 240, 140)
+	light.Range      = isEnhanced and 16 or 9
+	light.Parent     = anchor
+
+	TweenService:Create(light, TweenInfo.new(0.1, Enum.EasingStyle.Quad), {Brightness = 0}):Play()
+
+	task.delay(0.35, function()
+		if anchor and anchor.Parent then anchor:Destroy() end
+	end)
+end
+
+-- ============================================================
+-- VFX – NORMAL HIT PARTICLES
 -- ============================================================
 
 function Deadeye.SpawnHitParticles(position: Vector3, color: Color3)
@@ -408,6 +544,177 @@ function Deadeye.SpawnHitParticles(position: Vector3, color: Color3)
 	splatter:Emit(8)
 
 	task.delay(0.5, function()
+		if anchor and anchor.Parent then anchor:Destroy() end
+	end)
+end
+
+-- ============================================================
+-- VFX – HEADHUNTER ENHANCED HIT  (impressive 3rd-shot impact)
+-- ============================================================
+
+function Deadeye.SpawnEnhancedHitVFX(position: Vector3)
+	local anchor = Instance.new("Part")
+	anchor.Name         = "HeadhunterHitAnchor"
+	anchor.Size         = Vector3.new(0.1, 0.1, 0.1)
+	anchor.Transparency = 1
+	anchor.Anchored     = true
+	anchor.CanCollide   = false
+	anchor.Position     = position
+	anchor.Parent       = Workspace
+
+	local att = Instance.new("Attachment")
+	att.Parent = anchor
+
+	-- ── Expanding shockwave ring ──
+	local ring = Instance.new("Part")
+	ring.Name        = "ShockwaveRing"
+	ring.Shape       = Enum.PartType.Cylinder
+	ring.Size        = Vector3.new(0.12, 0.5, 0.5)
+	ring.Color       = Color3.fromRGB(255, 210, 50)
+	ring.Material    = Enum.Material.Neon
+	ring.Transparency = 0.15
+	ring.Anchored    = true
+	ring.CanCollide  = false
+	ring.CastShadow  = false
+	ring.CFrame      = CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90))
+	ring.Parent      = Workspace
+
+	TweenService:Create(ring,
+		TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ Size = Vector3.new(0.05, 7, 7), Transparency = 1 }
+	):Play()
+
+	-- Second, slightly delayed ring
+	task.delay(0.08, function()
+		if not anchor.Parent then return end
+		local ring2 = Instance.new("Part")
+		ring2.Name        = "ShockwaveRing2"
+		ring2.Shape       = Enum.PartType.Cylinder
+		ring2.Size        = Vector3.new(0.10, 0.3, 0.3)
+		ring2.Color       = Color3.fromRGB(255, 255, 140)
+		ring2.Material    = Enum.Material.Neon
+		ring2.Transparency = 0.25
+		ring2.Anchored    = true
+		ring2.CanCollide  = false
+		ring2.CastShadow  = false
+		ring2.CFrame      = CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90))
+		ring2.Parent      = Workspace
+		TweenService:Create(ring2,
+			TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{ Size = Vector3.new(0.04, 5, 5), Transparency = 1 }
+		):Play()
+		task.delay(0.4, function()
+			if ring2 and ring2.Parent then ring2:Destroy() end
+		end)
+	end)
+
+	-- ── Large centre flash ──
+	local bigFlash = Instance.new("ParticleEmitter")
+	bigFlash.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 250, 180)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 190, 40)),
+	})
+	bigFlash.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0,   2.2),
+		NumberSequenceKeypoint.new(0.3, 1.0),
+		NumberSequenceKeypoint.new(1,   0),
+	})
+	bigFlash.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	bigFlash.Lifetime    = NumberRange.new(0.1, 0.22)
+	bigFlash.Speed       = NumberRange.new(4, 18)
+	bigFlash.SpreadAngle = Vector2.new(180, 180)
+	bigFlash.Rate        = 0
+	bigFlash.Parent      = att
+	bigFlash:Emit(14)
+
+	-- ── Gold sparks (long-lived, gravity-affected) ──
+	local sparks = Instance.new("ParticleEmitter")
+	sparks.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 230, 60)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 140, 20)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(160, 80,  10)),
+	})
+	sparks.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0,   0.18),
+		NumberSequenceKeypoint.new(0.6, 0.09),
+		NumberSequenceKeypoint.new(1,   0),
+	})
+	sparks.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0,   0),
+		NumberSequenceKeypoint.new(0.7, 0.1),
+		NumberSequenceKeypoint.new(1,   1),
+	})
+	sparks.LightEmission = 0.8
+	sparks.Lifetime      = NumberRange.new(0.35, 0.75)
+	sparks.Speed         = NumberRange.new(10, 28)
+	sparks.SpreadAngle   = Vector2.new(180, 180)
+	sparks.Acceleration  = Vector3.new(0, -28, 0)
+	sparks.Rate          = 0
+	sparks.Parent        = att
+	sparks:Emit(28)
+
+	-- ── White-hot core pop ──
+	local core = Instance.new("ParticleEmitter")
+	core.Color = ColorSequence.new(Color3.fromRGB(255, 255, 240))
+	core.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0,   1.0),
+		NumberSequenceKeypoint.new(0.2, 0.4),
+		NumberSequenceKeypoint.new(1,   0),
+	})
+	core.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	core.LightEmission = 1
+	core.Lifetime      = NumberRange.new(0.06, 0.12)
+	core.Speed         = NumberRange.new(0, 3)
+	core.SpreadAngle   = Vector2.new(180, 180)
+	core.Rate          = 0
+	core.Parent        = att
+	core:Emit(6)
+
+	-- ── Smoke bloom ──
+	local smokeBloom = Instance.new("ParticleEmitter")
+	smokeBloom.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0,   Color3.fromRGB(180, 130, 50)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(120, 90,  40)),
+		ColorSequenceKeypoint.new(1,   Color3.fromRGB(60,  55,  50)),
+	})
+	smokeBloom.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0,   0.4),
+		NumberSequenceKeypoint.new(0.5, 1.0),
+		NumberSequenceKeypoint.new(1,   1.8),
+	})
+	smokeBloom.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0,   0.4),
+		NumberSequenceKeypoint.new(0.6, 0.7),
+		NumberSequenceKeypoint.new(1,   1),
+	})
+	smokeBloom.Lifetime     = NumberRange.new(0.5, 0.9)
+	smokeBloom.Speed        = NumberRange.new(2, 7)
+	smokeBloom.SpreadAngle  = Vector2.new(180, 180)
+	smokeBloom.Acceleration = Vector3.new(0, 4, 0)
+	smokeBloom.Rate         = 0
+	smokeBloom.Parent       = att
+	smokeBloom:Emit(10)
+
+	-- ── Bright point-light pop ──
+	local light = Instance.new("PointLight")
+	light.Brightness = 16
+	light.Color      = Color3.fromRGB(255, 210, 60)
+	light.Range      = 26
+	light.Parent     = anchor
+
+	TweenService:Create(light,
+		TweenInfo.new(0.35, Enum.EasingStyle.Quad),
+		{Brightness = 0}
+	):Play()
+
+	task.delay(0.9, function()
+		if ring   and ring.Parent   then ring:Destroy()   end
 		if anchor and anchor.Parent then anchor:Destroy() end
 	end)
 end
@@ -733,15 +1040,14 @@ local function triggerGunLower(tower: Model, st)
 	end)
 end
 
--- Plays the reload animation, then resets bullet display and clears reloading.
+-- Plays the reload animation then resets bullet display.
 local function triggerReload(tower: Model, st)
 	st.reloading    = true
-	st.lastShotTime = tick()   -- prevent gun-lower timer firing mid-reload
+	st.lastShotTime = tick()
 
 	-- All bullets grey immediately
 	Deadeye.UpdateBulletDisplay(tower, 0, true)
 
-	-- Fade out aim-idle and shoot so reload blends in cleanly
 	safeStop(st.aimIdleTrack, 0.1)
 	safeStop(st.shootTrack,   0.1)
 
@@ -769,12 +1075,12 @@ local function triggerReload(tower: Model, st)
 		if not tower or not tower.Parent then return end
 
 		st.reloading    = false
-		st.lastShotTime = tick()   -- restart gun-lower countdown after reload
+		st.lastShotTime = tick()
 
 		-- All bullets light up again
 		Deadeye.UpdateBulletDisplay(tower, 0, false)
 
-		-- Resume aim-idle so the raised pose is held again
+		-- Resume aim-idle so raised pose is held again
 		local animator2 = getOrCreateAnimator(tower)
 		if animator2 and st.gunState == "shoot_hold" then
 			safeDestroy(st.aimIdleTrack)
@@ -786,6 +1092,7 @@ local function triggerReload(tower: Model, st)
 	end)
 end
 
+-- Brief recoil burst for normal shots.
 local function playShootBrief(tower: Model, st)
 	if st.shootTrack then
 		pcall(function()
@@ -865,8 +1172,9 @@ function Deadeye.TickHeadhunterAim(tower: Model, locked: Model?): boolean
 	-- Draw / update the red aim laser each tick
 	Deadeye.ShowAimLaser(tower, locked)
 
+	-- Uses HEADHUNTER_AIM_TIME, not GUN_RAISE_DELAY
 	local elapsed = tick() - headhunterAimStart[tower]
-	if elapsed >= Deadeye.GUN_RAISE_DELAY then
+	if elapsed >= Deadeye.HEADHUNTER_AIM_TIME then
 		headhunterAimStart[tower] = nil
 		Deadeye.HideAimLaser(tower)
 		return true
@@ -942,7 +1250,6 @@ end
 function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): boolean
 	local st = getAnimState(tower)
 
-	-- Block attacks while reloading
 	if st.reloading then return false end
 
 	local atk   = tower:GetAttribute("ATK")             or 12
@@ -980,9 +1287,12 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 		end
 	end
 
+	-- Capture impact position before possible destroy
+	local impactPos = actualTarget.PrimaryPart.Position
+
 	-- ── Damage ──
 	if isEnhanced then
-		-- Headhunter – uses bullet 3
+		-- Headhunter – bullet 3
 		tower:SetAttribute("BasicAttackCount", 0)
 		local damage = ap * multi
 		local hp     = actualTarget:GetAttribute("HP")    or 0
@@ -1000,11 +1310,41 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 			actualTarget:Destroy()
 		end
 
-		-- Mark all 3 bullets spent, then kick off reload
+		-- ── Enhanced VFX ──
+		Deadeye.SpawnEnhancedHitVFX(impactPos)
+
+		if torso then
+			local barrel  = tower:FindFirstChild("GunBarrel", true)
+			local fromPos = barrel and barrel.WorldPosition or torso.Position
+			Deadeye.SpawnBarrelFlash(fromPos, true)
+			Deadeye.SpawnBullet(fromPos, impactPos, true)
+		end
+
+		-- ── Play the FULL shoot animation, then reload after it finishes ──
+		playShootBrief(tower, st)
+		st.lastShotTime = tick()
+
+		-- Mark bullet 3 as spent visually right away
 		Deadeye.UpdateBulletDisplay(tower, 3, false)
-		triggerReload(tower, st)
+
+		task.spawn(function()
+			-- Wait for the recoil animation to play to completion before reloading
+			if st.shootTrack then
+				if st.shootTrack.IsPlaying then
+					st.shootTrack.Stopped:Wait()
+				else
+					task.wait(0.25)
+				end
+			else
+				task.wait(0.25)
+			end
+			if tower and tower.Parent and not st.reloading then
+				triggerReload(tower, st)
+			end
+		end)
+
 	else
-		-- Revolver – uses bullet 1 or 2
+		-- Revolver – bullet 1 or 2
 		local newCount = count + 1
 		tower:SetAttribute("BasicAttackCount", newCount)
 		local damage = atk * multi
@@ -1015,29 +1355,23 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 			actualTarget:Destroy()
 		end
 
-		-- Grey out the bullet that was just fired
+		-- Grey out the fired bullet slot
 		Deadeye.UpdateBulletDisplay(tower, newCount, false)
-	end
 
-	-- ── VFX ──
-	if actualTarget.PrimaryPart and actualTarget.Parent then
-		local hitColor = isEnhanced
-			and Color3.fromRGB(255, 200, 50)
-			or  Color3.fromRGB(210, 210, 255)
-		Deadeye.SpawnHitParticles(actualTarget.PrimaryPart.Position, hitColor)
-	end
+		-- ── Normal VFX ──
+		Deadeye.SpawnHitParticles(impactPos, Color3.fromRGB(210, 210, 255))
 
-	if torso then
-		local barrel  = tower:FindFirstChild("GunBarrel", true)
-		local fromPos = barrel and barrel.WorldPosition or torso.Position
-		local toPos   = (actualTarget.PrimaryPart and actualTarget.PrimaryPart.Position)
-			or (torso.Position + torso.CFrame.LookVector * 5)
-		Deadeye.SpawnBullet(fromPos, toPos, isEnhanced)
-	end
+		if torso then
+			local barrel  = tower:FindFirstChild("GunBarrel", true)
+			local fromPos = barrel and barrel.WorldPosition or torso.Position
+			Deadeye.SpawnBarrelFlash(fromPos, false)
+			Deadeye.SpawnBullet(fromPos, impactPos, false)
+		end
 
-	-- ── Animation & timer ──
-	playShootBrief(tower, st)
-	st.lastShotTime = tick()
+		-- ── Brief recoil animation & timer ──
+		playShootBrief(tower, st)
+		st.lastShotTime = tick()
+	end
 
 	return true
 end

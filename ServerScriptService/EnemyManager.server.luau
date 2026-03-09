@@ -22,6 +22,11 @@ local BasicZombie = require(script.Parent:WaitForChild("Enemies"):WaitForChild("
 print("[EnemyManager] Modules loaded!")
 
 -- Workspace references
+
+for _, child in ipairs(Workspace:GetChildren()) do
+	print("[DEBUG]", child.Name, child.ClassName)
+end
+
 local pathFolder    = Workspace:WaitForChild("Path", 10)
 local enemiesFolder = Workspace:WaitForChild("Enemies", 10)
 local spawnPart     = Workspace:WaitForChild("EnemySpawn", 10)

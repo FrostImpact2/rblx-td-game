@@ -29,6 +29,7 @@ TowerStats.Templates = {
 		RNG      = 30,    -- long ranged
 		HP       = 75,
 		MOVE_SPD = 14,
+		
 
 		-- Attack info
 		AttackType   = "Ranged",

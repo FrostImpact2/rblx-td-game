@@ -8,6 +8,9 @@
 	  - Enemy attack behaviour is delegated to Enemies/BasicZombie.luau
 ]]
 
+
+print("[TowerManager] skibid")
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService        = game:GetService("RunService")
 local Workspace         = game:GetService("Workspace")
