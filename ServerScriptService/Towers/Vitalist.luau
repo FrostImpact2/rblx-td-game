@@ -246,46 +246,49 @@ function Vitalist.CreateChargeDisplay(tower: Model)
 
 	local billboard = Instance.new("BillboardGui")
 	billboard.Name           = "ChargeDisplay"
-	billboard.Size           = UDim2.new(0, 80, 0, 22)
+	-- Slightly wider and taller than the HP bar (4.5 studs wide × 0.55 studs tall vs HP bar's 4 × 0.4)
+	billboard.Size           = UDim2.new(4.5, 0, 0.55, 0)
 	billboard.StudsOffset    = Vector3.new(0, 3.8, 0)
 	billboard.AlwaysOnTop    = false
 	billboard.ResetOnSpawn   = false
 	billboard.LightInfluence = 0
 	billboard.Parent         = head
 
-	-- Background bar
+	-- Outer black border (matches HP bar style)
+	local outline = Instance.new("Frame")
+	outline.Name             = "Outline"
+	outline.Size             = UDim2.new(1, 0, 1, 0)
+	outline.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	outline.BorderSizePixel  = 0
+	outline.Parent           = billboard
+
+	-- Dark background
 	local bg = Instance.new("Frame")
-	bg.Name                   = "BG"
-	bg.Size                   = UDim2.new(1, 0, 1, 0)
-	bg.BackgroundColor3       = Color3.fromRGB(30, 30, 35)
-	bg.BackgroundTransparency = 0
-	bg.BorderSizePixel        = 0
-	bg.Parent                 = billboard
-	local bgCorner = Instance.new("UICorner")
-	bgCorner.CornerRadius = UDim.new(0, 3)
-	bgCorner.Parent = bg
+	bg.Name             = "ChargeBg"
+	bg.Size             = UDim2.new(1, -2, 1, -2)
+	bg.Position         = UDim2.new(0, 1, 0, 1)
+	bg.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+	bg.BorderSizePixel  = 0
+	bg.Parent           = outline
 
 	-- Fill bar
 	local fill = Instance.new("Frame")
-	fill.Name             = "Fill"
+	fill.Name             = "ChargeFill"
 	fill.Size             = UDim2.new(0, 0, 1, 0)
 	fill.BackgroundColor3 = ATK_COLOR
 	fill.BorderSizePixel  = 0
 	fill.Parent           = bg
-	local fillCorner = Instance.new("UICorner")
-	fillCorner.CornerRadius = UDim.new(0, 3)
-	fillCorner.Parent = fill
 
-	-- Charge text
+	-- Charge text (matches HP bar text style)
 	local label = Instance.new("TextLabel")
-	label.Name                   = "ChargeLabel"
+	label.Name                   = "ChargeText"
 	label.Size                   = UDim2.new(1, 0, 1, 0)
 	label.BackgroundTransparency = 1
 	label.Text                   = "0 / 40"
-	label.TextColor3             = Color3.fromRGB(220, 220, 220)
-	label.Font                   = Enum.Font.GothamBold
-	label.TextSize               = 10
-	label.TextXAlignment         = Enum.TextXAlignment.Center
+	label.TextColor3             = Color3.fromRGB(255, 255, 255)
+	label.TextScaled             = true
+	label.Font                   = Enum.Font.SourceSans
+	label.TextStrokeTransparency = 0.5
 	label.Parent                 = bg
 
 	chargeGuis[tower] = { billboard = billboard, fill = fill, label = label }
@@ -299,15 +302,16 @@ function Vitalist.UpdateChargeDisplay(tower: Model)
 	local protocol = tower:GetAttribute("Protocol") or "ATK"
 	local ratio    = math.clamp(charge / Vitalist.MAX_CHARGE, 0, 1)
 	data.fill.Size = UDim2.new(ratio, 0, 1, 0)
-	data.fill.BackgroundColor3 = (protocol == "SUPP") and SUPP_COLOR or ATK_COLOR
+
+	-- Yellow when ready for Nano Blast, otherwise ATK/SUPP colour
+	if charge >= Vitalist.MAX_CHARGE then
+		data.fill.BackgroundColor3 = Color3.fromRGB(220, 220, 60)
+	else
+		data.fill.BackgroundColor3 = (protocol == "SUPP") and SUPP_COLOR or ATK_COLOR
+	end
 
 	if data.label then
 		data.label.Text = charge .. " / " .. Vitalist.MAX_CHARGE
-	end
-
-	-- Glow effect when ready for Nano Blast
-	if charge >= Vitalist.MAX_CHARGE then
-		data.fill.BackgroundColor3 = Color3.fromRGB(220, 220, 60)
 	end
 end
 
@@ -373,13 +377,13 @@ function Vitalist.SpawnHitscanBeam(fromPos: Vector3, toPos: Vector3, color: Colo
 		{ Width0 = 0, Width1 = 0 }
 	):Play()
 
-	-- Point light pop at the origin
+	-- Soft ambient glow (replaces jarring full-brightness flash)
 	local light = Instance.new("PointLight")
-	light.Brightness = isEnhanced and 9 or 3
+	light.Brightness = isEnhanced and 1.5 or 0.6
 	light.Color      = color
-	light.Range      = isEnhanced and 22 or 10
+	light.Range      = isEnhanced and 14 or 7
 	light.Parent     = anchorA
-	TweenService:Create(light, TweenInfo.new(duration), { Brightness = 0 }):Play()
+	TweenService:Create(light, TweenInfo.new(duration + 0.1), { Brightness = 0 }):Play()
 
 	task.delay(duration + 0.15, function()
 		if anchorA and anchorA.Parent then anchorA:Destroy() end
@@ -785,7 +789,21 @@ function Vitalist.CreateModel(position: Vector3, TowerStats: any): Model?
 	model:SetAttribute("Protocol",    "ATK")  -- "ATK" or "SUPP"
 
 	model:PivotTo(CFrame.new(position))
-	circle.CFrame = CFrame.new(position.X, position.Y - 2.5, position.Z)
+
+	-- Sit the model exactly on the ground by measuring the lowest non-decorative part
+	local lowestY = math.huge
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart") and part.Name ~= "RangeCircle" then
+			lowestY = math.min(lowestY, part.Position.Y - part.Size.Y / 2)
+		end
+	end
+	if lowestY < math.huge then
+		local lift = position.Y - lowestY
+		model:PivotTo(CFrame.new(Vector3.new(position.X, position.Y + lift, position.Z)))
+	end
+
+	local finalPos = model.PrimaryPart and model.PrimaryPart.Position or position
+	circle.CFrame = CFrame.new(finalPos.X, finalPos.Y - 2.5, finalPos.Z)
 		* CFrame.Angles(0, 0, math.rad(90))
 
 	return model

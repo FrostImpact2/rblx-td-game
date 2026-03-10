@@ -555,9 +555,10 @@ RunService.Heartbeat:Connect(function()
 		end
 
 		if not target then
-			-- No target: clear locked HH target and tick Deadeye animation
+			-- No target: clear locked HH target, hide aim laser, and tick Deadeye animation
 			if towerType == "Deadeye" then
 				hhLockedTarget[tower] = nil
+				Deadeye.HideAimLaser(tower)
 				Deadeye.UpdateCombatState(tower, false, nil)
 			end
 			tower:SetAttribute("State", "Idle")
