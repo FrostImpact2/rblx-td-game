@@ -70,7 +70,11 @@ local C = {
 	TAB_BG    = Color3.fromRGB(42,  44,  58),
 	}
 
-local TAB_SLANT = -4
+local TAB_SLANT_DEGREES = -4
+
+-- Camera cinematic angle offsets
+local CAMERA_OFFSET        = Vector3.new(8, 5, 8)
+local CAMERA_LOOKAT_OFFSET = Vector3.new(0, 1, 0)
 
 -- ============================================================
 -- ROOT SCREEN GUI
@@ -293,7 +297,7 @@ for i, def in ipairs(TAB_DEFS) do
 	slantBg.Size               = UDim2.new(1, 20, 1, 10)
 	slantBg.Position           = UDim2.new(0.5, 0, 0.5, 0)
 	slantBg.AnchorPoint        = Vector2.new(0.5, 0.5)
-	slantBg.Rotation           = TAB_SLANT
+	slantBg.Rotation           = TAB_SLANT_DEGREES
 	slantBg.BackgroundColor3   = C.PANEL2
 	slantBg.BackgroundTransparency = 0.8
 	slantBg.BorderSizePixel    = 0
@@ -1240,8 +1244,8 @@ local function slideOpen()
 		if root then
 			camera.CameraType = Enum.CameraType.Scriptable
 			local targetCF = CFrame.new(
-				root.Position + Vector3.new(8, 5, 8),
-				root.Position + Vector3.new(0, 1, 0)
+				root.Position + CAMERA_OFFSET,
+				root.Position + CAMERA_LOOKAT_OFFSET
 			)
 			TweenService:Create(camera,
 				TweenInfo.new(SLIDE_TIME * 1.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
@@ -1253,6 +1257,10 @@ local function slideOpen()
 	if not activePanel then
 		openPanel("inventory")
 	end
+end
+
+local function restoreCameraType()
+	camera.CameraType = originalCameraType or Enum.CameraType.Custom
 end
 
 local function slideClose()
@@ -1272,14 +1280,12 @@ local function slideClose()
 					{ CFrame = originalCameraCF }
 				)
 				camTween:Play()
-				camTween.Completed:Connect(function()
-					camera.CameraType = originalCameraType or Enum.CameraType.Custom
-				end)
+				camTween.Completed:Connect(restoreCameraType)
 			else
-				camera.CameraType = originalCameraType or Enum.CameraType.Custom
+				restoreCameraType()
 			end
 		else
-			camera.CameraType = originalCameraType or Enum.CameraType.Custom
+			restoreCameraType()
 		end
 		originalCameraType = nil
 		originalCameraCF   = nil
