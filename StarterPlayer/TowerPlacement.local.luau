@@ -243,7 +243,7 @@ end
 
 local TOWER_PANEL_DATA = {
 	Deadeye = {
-		displayName  = "Hired Deadeye",
+		displayName  = "Deadeye",
 		sellValue    = 165,
 		upgradeCost  = 5000,
 		upgradeLines = { "+3 Damage, +4 Range", "1.2s > 0.8s Attack Rate", "250% > 350% Max Attack Rate Buff", "[Cost reduced $20 per Deadeye attack]" },
