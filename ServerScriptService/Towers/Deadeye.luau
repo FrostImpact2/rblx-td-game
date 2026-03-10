@@ -230,7 +230,7 @@ function Deadeye.CreateBulletDisplay(tower: Model)
 	billboard.Name           = "BulletDisplay"
 	-- Use stud-based size so bullets scale with world, not screen pixels
 	billboard.StudsOffset    = Vector3.new(0, 3.8, 0)
-	billboard.Size           = UDim2.new(2, 0, 0.65, 0)
+	billboard.Size           = UDim2.new(3.5, 0, 1.5, 0)
 	billboard.AlwaysOnTop    = false
 	billboard.ResetOnSpawn   = false
 	billboard.LightInfluence = 0
