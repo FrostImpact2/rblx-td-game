@@ -39,6 +39,7 @@
 	  Gun Reload     : 87714279300663   (one-shot)
 	  Gun Lower      : 134321960932781  (one-shot)
 	  Protocol Switch: 112311342264233  (one-shot)
+	  Walk           : 73323871613223   (looped)
 ]]
 
 local TweenService      = game:GetService("TweenService")
@@ -68,6 +69,7 @@ local ENHANCED_SHOOT_ANIM_ID  = "rbxassetid://119922322699649"
 local RELOAD_ANIM_ID          = "rbxassetid://87714279300663"
 local LOWER_ANIM_ID           = "rbxassetid://134321960932781"
 local PROTOCOL_SWITCH_ANIM_ID = "rbxassetid://112311342264233"
+local WALK_ANIM_ID            = "rbxassetid://73323871613223"
 
 -- ====== VFX COLOURS ======
 local SUPP_COLOR = Color3.fromRGB(50, 220, 80)   -- green (healing)
@@ -160,6 +162,7 @@ local function getAnimState(tower: Model)
 			reloadTrack     = nil,
 			lowerTrack      = nil,
 			switchTrack     = nil,
+			walkTrack       = nil,
 
 			reloading       = false,
 			bursting        = false,
@@ -234,6 +237,7 @@ function Vitalist.UpdateChargeDisplay(tower: Model)
 	local charge   = tower:GetAttribute("Charge")   or 0
 	local protocol = tower:GetAttribute("Protocol") or "ATK"
 	local ratio    = math.clamp(charge / Vitalist.MAX_CHARGE, 0, 1)
+	data.fill.Size = UDim2.new(ratio, 0, 1, 0)
 	data.fill.BackgroundColor3 = (protocol == "SUPP") and SUPP_COLOR or ATK_COLOR
 
 	if data.label then
@@ -283,8 +287,8 @@ function Vitalist.SpawnHitscanBeam(fromPos: Vector3, toPos: Vector3, color: Colo
 	local beam = Instance.new("Beam")
 	beam.Attachment0    = attA
 	beam.Attachment1    = attB
-	beam.Width0         = isEnhanced and 0.55 or 0.12
-	beam.Width1         = isEnhanced and 0.45 or 0.05
+	beam.Width0         = isEnhanced and 10 or 0.12
+	beam.Width1         = isEnhanced and 10 or 0.05
 	beam.Segments       = 1
 	beam.FaceCamera     = true
 	beam.LightEmission  = 1
@@ -302,13 +306,10 @@ function Vitalist.SpawnHitscanBeam(fromPos: Vector3, toPos: Vector3, color: Colo
 
 	local duration = isEnhanced and 0.45 or 0.12
 
-	-- Fade out the beam
+	-- Fade out the beam by tweening Width0/Width1 (NumberSequence cannot be tweened)
 	TweenService:Create(beam,
 		TweenInfo.new(duration, Enum.EasingStyle.Quad),
-		{ Transparency = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 0.5),
-			NumberSequenceKeypoint.new(1, 1),
-		}) }
+		{ Width0 = 0, Width1 = 0 }
 	):Play()
 
 	-- Point light pop at the origin
@@ -427,61 +428,8 @@ function Vitalist.SpawnEnhancedHitVFX(position: Vector3, color: Color3)
 	):Play()
 
 	-- Centre flash
-	local bigFlash = Instance.new("ParticleEmitter")
-	bigFlash.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(230, 255, 230)),
-		ColorSequenceKeypoint.new(1, color),
-	})
-	bigFlash.Size = NumberSequence.new({
-		NumberSequenceKeypoint.new(0,   2.0),
-		NumberSequenceKeypoint.new(0.3, 0.9),
-		NumberSequenceKeypoint.new(1,   0),
-	})
-	bigFlash.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0),
-		NumberSequenceKeypoint.new(1, 1),
-	})
-	bigFlash.LightEmission = 0.8
-	bigFlash.Lifetime      = NumberRange.new(0.1, 0.22)
-	bigFlash.Speed         = NumberRange.new(4, 18)
-	bigFlash.SpreadAngle   = Vector2.new(180, 180)
-	bigFlash.Rate          = 0
-	bigFlash.Parent        = att
-	bigFlash:Emit(12)
 
-	-- Sparks
-	local sparks = Instance.new("ParticleEmitter")
-	sparks.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0,   Color3.fromRGB(220, 255, 220)),
-		ColorSequenceKeypoint.new(0.5, color),
-		ColorSequenceKeypoint.new(1,   Color3.fromRGB(30, 80, 30)),
-	})
-	sparks.Size = NumberSequence.new({
-		NumberSequenceKeypoint.new(0,   0.18),
-		NumberSequenceKeypoint.new(0.6, 0.08),
-		NumberSequenceKeypoint.new(1,   0),
-	})
-	sparks.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0,   0),
-		NumberSequenceKeypoint.new(0.7, 0.1),
-		NumberSequenceKeypoint.new(1,   1),
-	})
-	sparks.LightEmission = 0.7
-	sparks.Lifetime      = NumberRange.new(0.35, 0.7)
-	sparks.Speed         = NumberRange.new(10, 26)
-	sparks.SpreadAngle   = Vector2.new(180, 180)
-	sparks.Acceleration  = Vector3.new(0, -26, 0)
-	sparks.Rate          = 0
-	sparks.Parent        = att
-	sparks:Emit(24)
 
-	-- Bright point-light
-	local light = Instance.new("PointLight")
-	light.Brightness = 14
-	light.Color      = color
-	light.Range      = 24
-	light.Parent     = anchor
-	TweenService:Create(light, TweenInfo.new(0.35, Enum.EasingStyle.Quad), { Brightness = 0 }):Play()
 
 	task.delay(0.9, function()
 		if ring   and ring.Parent   then ring:Destroy()   end
@@ -494,51 +442,7 @@ end
 -- ============================================================
 
 function Vitalist.SpawnMuzzleFlash(position: Vector3, color: Color3, isEnhanced: boolean?)
-	local anchor = Instance.new("Part")
-	anchor.Name         = "VitalistMuzzle"
-	anchor.Size         = Vector3.new(0.05, 0.05, 0.05)
-	anchor.Transparency = 1
-	anchor.Anchored     = true
-	anchor.CanCollide   = false
-	anchor.CastShadow   = false
-	anchor.Position     = position
-	anchor.Parent       = Workspace
-
-	local att = Instance.new("Attachment")
-	att.Parent = anchor
-
-	local flash = Instance.new("ParticleEmitter")
-	flash.Color = ColorSequence.new(isEnhanced
-		and Color3.fromRGB(200, 255, 200)
-		or  color
-	)
-	flash.Size = NumberSequence.new({
-		NumberSequenceKeypoint.new(0,   isEnhanced and 0.5 or 0.22),
-		NumberSequenceKeypoint.new(0.4, isEnhanced and 0.25 or 0.11),
-		NumberSequenceKeypoint.new(1,   0),
-	})
-	flash.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0),
-		NumberSequenceKeypoint.new(1, 1),
-	})
-	flash.Lifetime      = NumberRange.new(0.03, 0.09)
-	flash.Speed         = NumberRange.new(2, isEnhanced and 14 or 8)
-	flash.SpreadAngle   = Vector2.new(50, 50)
-	flash.LightEmission = 0.9
-	flash.Rate          = 0
-	flash.Parent        = att
-	flash:Emit(isEnhanced and 10 or 5)
-
-	local light = Instance.new("PointLight")
-	light.Brightness = isEnhanced and 9 or 4
-	light.Color      = color
-	light.Range      = isEnhanced and 16 or 9
-	light.Parent     = anchor
-	TweenService:Create(light, TweenInfo.new(0.1), { Brightness = 0 }):Play()
-
-	task.delay(0.3, function()
-		if anchor and anchor.Parent then anchor:Destroy() end
-	end)
+	
 end
 
 -- ============================================================
@@ -560,9 +464,11 @@ local function triggerGunRaise(tower: Model, st)
 		return
 	end
 
-	st.gunState = "raising"
-	safeStop(st.idleTrack,    0.12)
-	safeStop(st.lowerTrack,   0.1)
+	st.gunState     = "raising"
+	st.lastShotTime = tick()  -- prevent the lower-timer firing during the raise animation
+
+	safeStop(st.idleTrack,  0.12)
+	safeStop(st.lowerTrack, 0.1)
 
 	local animator = getOrCreateAnimator(tower)
 	if not animator then
@@ -581,7 +487,7 @@ local function triggerGunRaise(tower: Model, st)
 	st.raiseTrack = raiseTrack
 
 	task.spawn(function()
-		raiseTrack.Stopped:Wait()
+		if raiseTrack.IsPlaying then raiseTrack.Stopped:Wait() end
 
 		if not tower or not tower.Parent then return end
 		if st.gunState ~= "raising" then return end
@@ -636,7 +542,7 @@ local function triggerGunLower(tower: Model, st)
 	st.lowerTrack = lowerTrack
 
 	task.spawn(function()
-		lowerTrack.Stopped:Wait()
+		if lowerTrack.IsPlaying then lowerTrack.Stopped:Wait() end
 		if not tower or not tower.Parent then return end
 		if st.gunState ~= "lowering" then return end
 		st.gunState = "idle"
@@ -670,7 +576,7 @@ local function triggerReload(tower: Model, st)
 	st.reloadTrack = reloadTrack
 
 	task.spawn(function()
-		reloadTrack.Stopped:Wait()
+		if reloadTrack.IsPlaying then reloadTrack.Stopped:Wait() end
 		if not tower or not tower.Parent then return end
 		st.reloading    = false
 		st.lastShotTime = tick()
@@ -804,14 +710,23 @@ function Vitalist.StartWalk(model: Model)
 	safeStop(st.lowerTrack,   0.15)
 	safeStop(st.reloadTrack,  0.1)
 	st.gunState = "walking"
+
+	local animator = getOrCreateAnimator(model)
+	if not animator then return end
+	if not (st.walkTrack and st.walkTrack.IsPlaying) then
+		safeDestroy(st.walkTrack)
+		st.walkTrack = loadAndPlay(animator, WALK_ANIM_ID, true, Enum.AnimationPriority.Movement, 0.15)
+	end
 end
 
 function Vitalist.StopWalk(model: Model)
 	Vitalist.RestoreBaseC0s(model)
 	local st = animState[model]
-	if st then
-		st.gunState = "idle"
-	end
+	if not st then return end
+	safeStop(st.walkTrack, 0.15)
+	st.walkTrack = nil
+	st.gunState  = "idle"
+	playIdle(model, st)
 end
 
 -- ============================================================
@@ -1042,56 +957,63 @@ function Vitalist.DoAttack(
 	st.bursting = true
 
 	task.spawn(function()
-		local bulletDmg = (atk * multi) * 0.125
+		local ok, err = pcall(function()
+			local bulletDmg = (atk * multi) * 0.125
 
-		for i = 1, Vitalist.BULLETS_PER_BURST do
-			if not tower or not tower.Parent then break end
-			if not target or not target.Parent then break end
+			for i = 1, Vitalist.BULLETS_PER_BURST do
+				if not tower or not tower.Parent then break end
+				if not target or not target.Parent then break end
 
-			-- Determine current target position (enemies move)
-			local targetPart = target.PrimaryPart
-			if not targetPart then break end
-			local impactPos = targetPart.Position
+				-- Determine current target position (enemies move)
+				local targetPart = target.PrimaryPart
+				if not targetPart then break end
+				local impactPos = targetPart.Position
 
-			-- Apply effect
-			if protocol == "SUPP" then
-				local hp    = target:GetAttribute("HP")    or 0
-				local maxHP = target:GetAttribute("MaxHP") or 1
-				target:SetAttribute("HP", math.min(hp + bulletDmg, maxHP))
-			else
-				local hp    = target:GetAttribute("HP") or 0
-				local newHP = hp - bulletDmg
-				target:SetAttribute("HP", newHP)
-				if newHP <= 0 and target.Parent then
-					target:Destroy()
-					target = nil
+				-- Apply effect
+				if protocol == "SUPP" then
+					local hp    = target:GetAttribute("HP")    or 0
+					local maxHP = target:GetAttribute("MaxHP") or 1
+					target:SetAttribute("HP", math.min(hp + bulletDmg, maxHP))
+				else
+					local hp    = target:GetAttribute("HP") or 0
+					local newHP = hp - bulletDmg
+					target:SetAttribute("HP", newHP)
+					if newHP <= 0 and target.Parent then
+						target:Destroy()
+						target = nil
+					end
+				end
+
+				-- VFX
+				if torso then
+					local barrel  = tower:FindFirstChild("GunBarrel", true)
+					local fromPos = barrel and barrel.WorldPosition or torso.Position
+					Vitalist.SpawnMuzzleFlash(fromPos, beamColor, false)
+					Vitalist.SpawnHitscanBeam(fromPos, impactPos, beamColor, false)
+				end
+				if target then
+					Vitalist.SpawnHitParticles(impactPos, beamColor)
+				end
+
+				-- Shoot animation (one cycle per bullet)
+				playShootOnce(tower, st)
+
+				-- Increment charge
+				local newCharge = math.min((tower:GetAttribute("Charge") or 0) + 1, Vitalist.MAX_CHARGE)
+				tower:SetAttribute("Charge", newCharge)
+				Vitalist.UpdateChargeDisplay(tower)
+
+				if i < Vitalist.BULLETS_PER_BURST then
+					task.wait(Vitalist.BURST_SHOT_INTERVAL)
 				end
 			end
+		end)
 
-			-- VFX
-			if torso then
-				local barrel  = tower:FindFirstChild("GunBarrel", true)
-				local fromPos = barrel and barrel.WorldPosition or torso.Position
-				Vitalist.SpawnMuzzleFlash(fromPos, beamColor, false)
-				Vitalist.SpawnHitscanBeam(fromPos, impactPos, beamColor, false)
-			end
-			if target then
-				Vitalist.SpawnHitParticles(impactPos, beamColor)
-			end
-
-			-- Shoot animation (one cycle per bullet)
-			playShootOnce(tower, st)
-
-			-- Increment charge
-			local newCharge = math.min((tower:GetAttribute("Charge") or 0) + 1, Vitalist.MAX_CHARGE)
-			tower:SetAttribute("Charge", newCharge)
-			Vitalist.UpdateChargeDisplay(tower)
-
-			if i < Vitalist.BULLETS_PER_BURST then
-				task.wait(Vitalist.BURST_SHOT_INTERVAL)
-			end
+		if not ok then
+			warn("[Vitalist] Burst loop error:", err)
 		end
 
+		-- Always reset these regardless of any error inside the loop
 		st.bursting     = false
 		st.lastShotTime = tick()
 	end)
@@ -1106,6 +1028,7 @@ end
 function Vitalist.CleanupTower(tower: Model)
 	local st = animState[tower]
 	if st then
+		safeDestroy(st.walkTrack)
 		safeDestroy(st.idleTrack)
 		safeDestroy(st.raiseTrack)
 		safeDestroy(st.gunIdleTrack)
