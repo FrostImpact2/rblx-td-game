@@ -228,8 +228,9 @@ function Deadeye.CreateBulletDisplay(tower: Model)
 
 	local billboard = Instance.new("BillboardGui")
 	billboard.Name           = "BulletDisplay"
-	billboard.Size           = UDim2.new(0, 62, 0, 24)
+	-- Use stud-based size so bullets scale with world, not screen pixels
 	billboard.StudsOffset    = Vector3.new(0, 3.8, 0)
+	billboard.Size           = UDim2.new(2, 0, 0.65, 0)
 	billboard.AlwaysOnTop    = false
 	billboard.ResetOnSpawn   = false
 	billboard.LightInfluence = 0
@@ -244,7 +245,7 @@ function Deadeye.CreateBulletDisplay(tower: Model)
 	layout.FillDirection       = Enum.FillDirection.Horizontal
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 	layout.VerticalAlignment   = Enum.VerticalAlignment.Center
-	layout.Padding             = UDim.new(0, 5)
+	layout.Padding             = UDim.new(0.06, 0)
 	layout.Parent              = container
 
 	local imgs        = getBulletImages()
@@ -253,20 +254,20 @@ function Deadeye.CreateBulletDisplay(tower: Model)
 	local labels = {}
 	for i = 1, 3 do
 		if usingImages then
-			-- ── Image-based bullet ──
+			-- ── Image-based bullet (scale-relative sizing) ──
 			local img = Instance.new("ImageLabel")
 			img.Name                    = "Bullet" .. i
-			img.Size                    = UDim2.new(0, 14, 0, 22)
+			img.Size                    = UDim2.new(0.28, 0, 1, 0)
 			img.BackgroundTransparency  = 1
 			img.ScaleType               = Enum.ScaleType.Fit
 			img.Image                   = (i == 3) and imgs.glow or imgs.active
 			img.Parent                  = container
 			labels[i]                   = img
 		else
-			-- ── Fallback: coloured shape ──
+			-- ── Fallback: coloured shape (scale-relative sizing) ──
 			local wrapper = Instance.new("Frame")
 			wrapper.Name                    = "Bullet" .. i
-			wrapper.Size                    = UDim2.new(0, 9, 0, 20)
+			wrapper.Size                    = UDim2.new(0.24, 0, 0.85, 0)
 			wrapper.BackgroundTransparency  = 1
 			wrapper.Parent                  = container
 
@@ -475,14 +476,14 @@ function Deadeye.SpawnBarrelFlash(position: Vector3, isEnhanced: boolean?)
 	smoke.Parent      = att
 	smoke:Emit(3)
 
-	-- Point light pop
-	local light = Instance.new("PointLight")
-	light.Brightness = isEnhanced and 10 or 5
-	light.Color      = isEnhanced and Color3.fromRGB(255, 185, 50) or Color3.fromRGB(255, 240, 140)
-	light.Range      = isEnhanced and 16 or 9
-	light.Parent     = anchor
+	-- Soft ambient glow (replaces jarring PointLight flash)
+	local glow = Instance.new("PointLight")
+	glow.Brightness = isEnhanced and 1.5 or 0.8
+	glow.Color      = isEnhanced and Color3.fromRGB(255, 185, 50) or Color3.fromRGB(255, 240, 140)
+	glow.Range      = isEnhanced and 10 or 6
+	glow.Parent     = anchor
 
-	TweenService:Create(light, TweenInfo.new(0.1, Enum.EasingStyle.Quad), {Brightness = 0}):Play()
+	TweenService:Create(glow, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {Brightness = 0}):Play()
 
 	task.delay(0.35, function()
 		if anchor and anchor.Parent then anchor:Destroy() end
@@ -701,15 +702,15 @@ function Deadeye.SpawnEnhancedHitVFX(position: Vector3)
 	smokeBloom.Parent       = att
 	smokeBloom:Emit(10)
 
-	-- ── Bright point-light pop ──
+	-- ── Soft point-light (replaces jarring full-brightness flash) ──
 	local light = Instance.new("PointLight")
-	light.Brightness = 16
+	light.Brightness = 2
 	light.Color      = Color3.fromRGB(255, 210, 60)
-	light.Range      = 26
+	light.Range      = 16
 	light.Parent     = anchor
 
 	TweenService:Create(light,
-		TweenInfo.new(0.35, Enum.EasingStyle.Quad),
+		TweenInfo.new(0.5, Enum.EasingStyle.Quad),
 		{Brightness = 0}
 	):Play()
 
@@ -734,14 +735,25 @@ function Deadeye.ShowAimLaser(tower: Model, target: Model)
 
 	local torso  = tower.PrimaryPart
 	if not torso then return end
+
+	-- Find the gun barrel (may be Attachment or BasePart)
 	local barrel = tower:FindFirstChild("GunBarrel", true)
-	local origin = barrel or torso
 
 	local att0 = Instance.new("Attachment")
 	if barrel then
-		att0.Position = Vector3.new(0, 0, -(barrel.Size.Z / 2))
+		if barrel:IsA("Attachment") then
+			-- Attach directly to the barrel attachment's parent part
+			att0.Position = barrel.Position
+			att0.Parent   = barrel.Parent or torso
+		elseif barrel:IsA("BasePart") then
+			att0.Position = Vector3.new(0, 0, -(barrel.Size.Z / 2))
+			att0.Parent   = barrel
+		else
+			att0.Parent = torso
+		end
+	else
+		att0.Parent = torso
 	end
-	att0.Parent = origin
 
 	local att1Part = Instance.new("Part")
 	att1Part.Name         = "AimLaserAnchor"
@@ -842,7 +854,21 @@ function Deadeye.CreateModel(position: Vector3, TowerStats: any): Model?
 	model:SetAttribute("BasicAttackCount", 0)
 
 	model:PivotTo(CFrame.new(position))
-	circle.CFrame = CFrame.new(position.X, position.Y - 2.5, position.Z)
+
+	-- Sit the model exactly on the ground by measuring the lowest non-decorative part
+	local lowestY = math.huge
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart") and part.Name ~= "RangeCircle" then
+			lowestY = math.min(lowestY, part.Position.Y - part.Size.Y / 2)
+		end
+	end
+	if lowestY < math.huge then
+		local lift = position.Y - lowestY
+		model:PivotTo(CFrame.new(Vector3.new(position.X, position.Y + lift, position.Z)))
+	end
+
+	local finalPos = model.PrimaryPart and model.PrimaryPart.Position or position
+	circle.CFrame = CFrame.new(finalPos.X, finalPos.Y - 2.5, finalPos.Z)
 		* CFrame.Angles(0, 0, math.rad(90))
 
 	return model

@@ -244,168 +244,313 @@ local function getTowerFromPart(part: Instance): Model?
 	return nil
 end
 
+-- Tower-type display data for the info panel
+local TOWER_PANEL_DATA = {
+	Deadeye = {
+		displayName  = "Hired Deadeye",
+		sellValue    = 165,
+		upgradeCost  = 5000,
+		upgradeLines = { "+3 Damage, +4 Range", "1.2s > 0.8s Attack Rate", "250% > 350% Max Attack Rate Buff", "[Cost reduced $20 per Deadeye attack]" },
+		upgradeName  = "Productive Work Effort Initiative",
+		level        = 0,
+		maxLevel     = 3,
+	},
+	Vitalist = {
+		displayName  = "Vitalist",
+		sellValue    = 155,
+		upgradeCost  = 4500,
+		upgradeLines = { "+4 AP, +5 Range", "1.2s > 0.9s Attack Rate", "Nano Blast pierces 2 extra targets" },
+		upgradeName  = "Medical Supply Enhancement",
+		level        = 0,
+		maxLevel     = 3,
+	},
+	Warrior = {
+		displayName  = "Warrior",
+		sellValue    = 130,
+		upgradeCost  = 3000,
+		upgradeLines = { "+5 Damage, +2 Range", "1.0s > 0.8s Attack Rate", "Leaping Slash cone +15°" },
+		upgradeName  = "Combat Training",
+		level        = 0,
+		maxLevel     = 3,
+	},
+}
+
 local function createInfoGui(towerModel: Model)
 	if infoGui then infoGui:Destroy() end
 
-	local atk     = towerModel:GetAttribute("ATK") or 0
-	local atkSpd  = towerModel:GetAttribute("ATK_SPD") or 0
-	local rng     = towerModel:GetAttribute("RNG") or 0
-	local hp      = towerModel:GetAttribute("HP") or 0
-	local maxHp   = towerModel:GetAttribute("MaxHP") or 0
-	local moveSpd = towerModel:GetAttribute("MOVE_SPD") or 0
-	local state   = towerModel:GetAttribute("State") or "Idle"
+	local towerType = towerModel:GetAttribute("TowerType") or "Warrior"
+	local atk       = towerModel:GetAttribute("ATK")     or 0
+	local atkSpd    = towerModel:GetAttribute("ATK_SPD") or 0
+	local rng       = towerModel:GetAttribute("RNG")     or 0
+
+	local info = TOWER_PANEL_DATA[towerType] or TOWER_PANEL_DATA.Warrior
 
 	local gui = Instance.new("ScreenGui")
-	gui.Name = "TowerInfoGUI"; gui.ResetOnSpawn = false; gui.Parent = playerGui
+	gui.Name          = "TowerInfoGUI"
+	gui.ResetOnSpawn  = false
+	gui.DisplayOrder  = 10
+	gui.Parent        = playerGui
 
+	-- ── Main panel ──────────────────────────────────────────────────────────
 	local panel = Instance.new("Frame")
-	panel.Name = "Panel"
-	panel.Size = UDim2.new(0, 250, 0, 400)
-	panel.Position = UDim2.new(1, -270, 0.5, -200)
-	panel.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-	panel.BackgroundTransparency = 0.05
-	panel.BorderSizePixel = 0; panel.Parent = gui
+	panel.Name             = "Panel"
+	panel.Size             = UDim2.new(0, 510, 0, 320)
+	panel.Position         = UDim2.new(0.5, -255, 1, -360)
+	panel.BackgroundColor3 = Color3.fromRGB(50, 55, 65)
+	panel.BorderSizePixel  = 0
+	panel.Parent           = gui
+	Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 8)
 
-	Instance.new("UIStroke", panel).Color = Color3.fromRGB(60, 60, 70)
-
-	-- Helper: divider
-	local function div(y)
-		local d = Instance.new("Frame")
-		d.Size = UDim2.new(1, -20, 0, 1)
-		d.Position = UDim2.new(0, 10, 0, y)
-		d.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-		d.BorderSizePixel = 0; d.Parent = panel
+	-- ── Title bar ───────────────────────────────────────────────────────────
+	local titleBg = Instance.new("Frame")
+	titleBg.Size             = UDim2.new(1, 0, 0, 44)
+	titleBg.BackgroundColor3 = Color3.fromRGB(65, 70, 80)
+	titleBg.BorderSizePixel  = 0
+	titleBg.Parent           = panel
+	do
+		Instance.new("UICorner", titleBg).CornerRadius = UDim.new(0, 8)
+		local fix = Instance.new("Frame")
+		fix.Size             = UDim2.new(1, 0, 0.5, 0)
+		fix.Position         = UDim2.new(0, 0, 0.5, 0)
+		fix.BackgroundColor3 = Color3.fromRGB(65, 70, 80)
+		fix.BorderSizePixel  = 0
+		fix.Parent           = titleBg
 	end
 
-	-- Helper: label
-	local function lbl(text, pos, size, color, font, xAlign)
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Size               = UDim2.new(1, -50, 1, 0)
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Text               = info.displayName
+	titleLabel.TextColor3         = Color3.fromRGB(255, 255, 255)
+	titleLabel.Font               = Enum.Font.GothamBold
+	titleLabel.TextSize           = 20
+	titleLabel.TextXAlignment     = Enum.TextXAlignment.Center
+	titleLabel.Parent             = titleBg
+
+	-- Close (X) button
+	local closeBtn = Instance.new("TextButton")
+	closeBtn.Size             = UDim2.new(0, 44, 0, 44)
+	closeBtn.Position         = UDim2.new(1, -44, 0, 0)
+	closeBtn.BackgroundColor3 = Color3.fromRGB(100, 60, 60)
+	closeBtn.BorderSizePixel  = 0
+	closeBtn.Text             = "X"
+	closeBtn.TextColor3       = Color3.fromRGB(230, 230, 230)
+	closeBtn.Font             = Enum.Font.GothamBold
+	closeBtn.TextSize         = 18
+	closeBtn.Parent           = panel
+	Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 8)
+	closeBtn.MouseButton1Click:Connect(deselectTower)
+
+	-- ── Left box: portrait + DMG ─────────────────────────────────────────────
+	local leftBox = Instance.new("Frame")
+	leftBox.Size             = UDim2.new(0, 138, 0, 138)
+	leftBox.Position         = UDim2.new(0, 8, 0, 50)
+	leftBox.BackgroundColor3 = Color3.fromRGB(70, 75, 85)
+	leftBox.BorderSizePixel  = 0
+	leftBox.Parent           = panel
+	Instance.new("UICorner", leftBox).CornerRadius = UDim.new(0, 6)
+
+	local dmgLabel = Instance.new("TextLabel")
+	dmgLabel.Name                 = "DMGLabel"
+	dmgLabel.Size                 = UDim2.new(1, 0, 0, 28)
+	dmgLabel.BackgroundTransparency = 1
+	dmgLabel.Text                 = "DMG: " .. tostring(atk)
+	dmgLabel.TextColor3           = Color3.fromRGB(200, 200, 210)
+	dmgLabel.Font                 = Enum.Font.GothamBold
+	dmgLabel.TextSize             = 15
+	dmgLabel.Parent               = leftBox
+
+	local portrait = Instance.new("ImageLabel")
+	portrait.Size                   = UDim2.new(1, -10, 0, 100)
+	portrait.Position               = UDim2.new(0, 5, 0, 30)
+	portrait.BackgroundColor3       = Color3.fromRGB(40, 45, 55)
+	portrait.BackgroundTransparency = 0
+	portrait.BorderSizePixel        = 0
+	portrait.Image                  = "rbxassetid://0"
+	portrait.Parent                 = leftBox
+	Instance.new("UICorner", portrait).CornerRadius = UDim.new(0.5, 0)
+
+	-- ── Right section: upgrade info ─────────────────────────────────────────
+	local rightX   = 154
+	local rightW   = 510 - rightX - 8
+	local lineY    = 50
+	for i, line in ipairs(info.upgradeLines) do
+		local lbl = Instance.new("TextLabel")
+		lbl.Size               = UDim2.new(0, rightW, 0, 22)
+		lbl.Position           = UDim2.new(0, rightX, 0, lineY + (i-1) * 23)
+		lbl.BackgroundTransparency = 1
+		lbl.Text               = line
+		lbl.Font               = Enum.Font.GothamBold
+		lbl.TextSize           = 13
+		lbl.TextWrapped        = true
+		lbl.TextXAlignment     = Enum.TextXAlignment.Left
+		lbl.TextYAlignment     = Enum.TextYAlignment.Center
+		lbl.Parent             = panel
+		if i == 1 then
+			lbl.TextColor3 = Color3.fromRGB(80, 220, 80)
+		elseif i <= 3 then
+			lbl.TextColor3 = Color3.fromRGB(220, 220, 220)
+		else
+			lbl.TextColor3 = Color3.fromRGB(150, 160, 175)
+			lbl.Font       = Enum.Font.Gotham
+		end
+	end
+
+	-- ── Level + next upgrade ─────────────────────────────────────────────────
+	local levelLabel = Instance.new("TextLabel")
+	levelLabel.Name               = "LevelLabel"
+	levelLabel.Size               = UDim2.new(0, 240, 0, 26)
+	levelLabel.Position           = UDim2.new(0, 8, 0, 193)
+	levelLabel.BackgroundTransparency = 1
+	levelLabel.Text               = "Level " .. info.level .. "/" .. info.maxLevel
+	levelLabel.TextColor3         = Color3.fromRGB(255, 255, 255)
+	levelLabel.Font               = Enum.Font.GothamBold
+	levelLabel.TextSize           = 18
+	levelLabel.TextXAlignment     = Enum.TextXAlignment.Left
+	levelLabel.Parent             = panel
+
+	local nextLbl = Instance.new("TextLabel")
+	nextLbl.Size               = UDim2.new(1, -16, 0, 20)
+	nextLbl.Position           = UDim2.new(0, 8, 0, 217)
+	nextLbl.BackgroundTransparency = 1
+	nextLbl.Text               = "Next Upgrade - " .. info.upgradeName
+	nextLbl.TextColor3         = Color3.fromRGB(190, 195, 210)
+	nextLbl.Font               = Enum.Font.Gotham
+	nextLbl.TextSize           = 12
+	nextLbl.TextXAlignment     = Enum.TextXAlignment.Left
+	nextLbl.TextTruncate       = Enum.TextTruncate.AtEnd
+	nextLbl.Parent             = panel
+
+	-- Divider
+	local divLine = Instance.new("Frame")
+	divLine.Size             = UDim2.new(1, -16, 0, 1)
+	divLine.Position         = UDim2.new(0, 8, 0, 240)
+	divLine.BackgroundColor3 = Color3.fromRGB(80, 85, 95)
+	divLine.BorderSizePixel  = 0
+	divLine.Parent           = panel
+
+	-- ── Button row ──────────────────────────────────────────────────────────
+	-- Upgrade button (green)
+	local upgradeBtn = Instance.new("TextButton")
+	upgradeBtn.Size             = UDim2.new(0, 164, 0, 46)
+	upgradeBtn.Position         = UDim2.new(0, 8, 0, 246)
+	upgradeBtn.BackgroundColor3 = Color3.fromRGB(55, 165, 55)
+	upgradeBtn.BorderSizePixel  = 0
+	upgradeBtn.Text             = "Upgrade: $" .. tostring(info.upgradeCost)
+	upgradeBtn.TextColor3       = Color3.fromRGB(255, 255, 255)
+	upgradeBtn.Font             = Enum.Font.GothamBold
+	upgradeBtn.TextSize         = 15
+	upgradeBtn.Parent           = panel
+	Instance.new("UICorner", upgradeBtn).CornerRadius = UDim.new(0, 6)
+
+	-- Target toggle (blue, stacked two rows)
+	local targetBox = Instance.new("Frame")
+	targetBox.Size             = UDim2.new(0, 115, 0, 46)
+	targetBox.Position         = UDim2.new(0, 180, 0, 246)
+	targetBox.BackgroundColor3 = Color3.fromRGB(40, 100, 185)
+	targetBox.BorderSizePixel  = 0
+	targetBox.Parent           = panel
+	Instance.new("UICorner", targetBox).CornerRadius = UDim.new(0, 6)
+
+	local targetTop = Instance.new("TextLabel")
+	targetTop.Name               = "TargetModeLabel"
+	targetTop.Size               = UDim2.new(1, 0, 0.5, 0)
+	targetTop.BackgroundTransparency = 1
+	targetTop.Text               = "Targets: First"
+	targetTop.TextColor3         = Color3.fromRGB(215, 235, 255)
+	targetTop.Font               = Enum.Font.GothamBold
+	targetTop.TextSize           = 12
+	targetTop.Parent             = targetBox
+
+	local targetBot = Instance.new("Frame")
+	targetBot.Size             = UDim2.new(1, 0, 0.5, 0)
+	targetBot.Position         = UDim2.new(0, 0, 0.5, 0)
+	targetBot.BackgroundColor3 = Color3.fromRGB(50, 120, 205)
+	targetBot.BorderSizePixel  = 0
+	targetBot.Parent           = targetBox
+	do
+		Instance.new("UICorner", targetBot).CornerRadius = UDim.new(0, 6)
+		local fix = Instance.new("Frame")
+		fix.Size             = UDim2.new(1, 0, 0.5, 0)
+		fix.BackgroundColor3 = Color3.fromRGB(50, 120, 205)
+		fix.BorderSizePixel  = 0
+		fix.Parent           = targetBot
 		local t = Instance.new("TextLabel")
-		t.Size = size; t.Position = pos
-		t.BackgroundTransparency = 1; t.Text = text
-		t.TextColor3 = color; t.TextScaled = true
-		t.TextWrapped = true
-		t.TextXAlignment = xAlign or Enum.TextXAlignment.Left
-		t.Font = font or Enum.Font.Gotham; t.Parent = panel
-		return t
+		t.Size               = UDim2.new(1, 0, 1, 0)
+		t.BackgroundTransparency = 1
+		t.Text               = "Manual"
+		t.TextColor3         = Color3.fromRGB(215, 235, 255)
+		t.Font               = Enum.Font.GothamBold
+		t.TextSize           = 12
+		t.Parent             = targetBot
 	end
 
-	-- Tower name + State
-	lbl(towerModel.Name, UDim2.new(0,10,0,6), UDim2.new(0.55,0,0,28),
-		Color3.fromRGB(255,255,255), Enum.Font.GothamBold)
+	-- Sell button (red)
+	local sellBtn = Instance.new("TextButton")
+	sellBtn.Size             = UDim2.new(0, 186, 0, 46)
+	sellBtn.Position         = UDim2.new(0, 303, 0, 246)
+	sellBtn.BackgroundColor3 = Color3.fromRGB(180, 45, 45)
+	sellBtn.BorderSizePixel  = 0
+	sellBtn.Text             = "Sell: $" .. tostring(info.sellValue)
+	sellBtn.TextColor3       = Color3.fromRGB(255, 255, 255)
+	sellBtn.Font             = Enum.Font.GothamBold
+	sellBtn.TextSize         = 15
+	sellBtn.Parent           = panel
+	Instance.new("UICorner", sellBtn).CornerRadius = UDim.new(0, 6)
 
-	local stateLabel = lbl(state, UDim2.new(0.55,0,0,9), UDim2.new(0.45,-10,0,22),
-		Color3.fromRGB(100,200,255), Enum.Font.Gotham, Enum.TextXAlignment.Right)
-	stateLabel.Name = "StateLabel"
+	-- ── Bottom stats bar ─────────────────────────────────────────────────────
+	local statsBar = Instance.new("Frame")
+	statsBar.Size             = UDim2.new(1, 0, 0, 46)
+	statsBar.Position         = UDim2.new(0, 0, 1, -46)
+	statsBar.BackgroundColor3 = Color3.fromRGB(38, 42, 52)
+	statsBar.BorderSizePixel  = 0
+	statsBar.Parent           = panel
+	do
+		Instance.new("UICorner", statsBar).CornerRadius = UDim.new(0, 8)
+		local fix = Instance.new("Frame")
+		fix.Size             = UDim2.new(1, 0, 0.5, 0)
+		fix.BackgroundColor3 = Color3.fromRGB(38, 42, 52)
+		fix.BorderSizePixel  = 0
+		fix.Parent           = statsBar
+	end
 
-	div(38)
-
-	-- Stat pills
-	local statDefs = {
-		{ "ATK", tostring(atk).." ATK",                    Color3.fromRGB(220,60,60),  Color3.fromRGB(40,15,15) },
-		{ "HP",  tostring(hp).."/"..tostring(maxHp).." HP", Color3.fromRGB(60,200,60),  Color3.fromRGB(15,40,15) },
-		{ "RNG", tostring(rng).." RNG",                    Color3.fromRGB(60,140,220), Color3.fromRGB(15,25,40) },
+	local statCells = {
+		{ name = "ATKStat", value = tostring(atk),                   icon = "⚔" },
+		{ name = "RNGStat", value = tostring(rng),                   icon = "◎" },
+		{ name = "SPDStat", value = string.format("%.1f", atkSpd),   icon = "⏱" },
 	}
-	for i, s in ipairs(statDefs) do
-		local pill = Instance.new("Frame")
-		pill.Name = s[1].."Pill"
-		pill.Size = UDim2.new(0, 70, 0, 22)
-		pill.Position = UDim2.new(0, 6 + (i-1)*76, 0, 48)
-		pill.BackgroundColor3 = s[4]; pill.BorderSizePixel = 0; pill.Parent = panel
-		Instance.new("UIStroke", pill).Color = s[3]
-		local t = Instance.new("TextLabel")
-		t.Name = "Value"; t.Size = UDim2.new(1,0,1,0)
-		t.BackgroundTransparency = 1; t.Text = s[2]
-		t.TextColor3 = s[3]; t.TextScaled = true
-		t.Font = Enum.Font.GothamBold; t.Parent = pill
+	local cellW = 510 / 3
+	for i, s in ipairs(statCells) do
+		local cell = Instance.new("Frame")
+		cell.Name             = s.name
+		cell.Size             = UDim2.new(0, cellW - 4, 1, 0)
+		cell.Position         = UDim2.new(0, (i-1) * cellW + 2, 0, 0)
+		cell.BackgroundTransparency = 1
+		cell.Parent           = statsBar
+
+		local valLbl = Instance.new("TextLabel")
+		valLbl.Name               = "Value"
+		valLbl.Size               = UDim2.new(0.55, 0, 1, 0)
+		valLbl.Position           = UDim2.new(0, 12, 0, 0)
+		valLbl.BackgroundTransparency = 1
+		valLbl.Text               = s.value
+		valLbl.TextColor3         = Color3.fromRGB(225, 225, 225)
+		valLbl.Font               = Enum.Font.GothamBold
+		valLbl.TextSize           = 20
+		valLbl.TextXAlignment     = Enum.TextXAlignment.Left
+		valLbl.Parent             = cell
+
+		local iconLbl = Instance.new("TextLabel")
+		iconLbl.Size               = UDim2.new(0.45, -12, 1, 0)
+		iconLbl.Position           = UDim2.new(0.55, 0, 0, 0)
+		iconLbl.BackgroundTransparency = 1
+		iconLbl.Text               = s.icon
+		iconLbl.TextColor3         = Color3.fromRGB(140, 165, 210)
+		iconLbl.Font               = Enum.Font.GothamBold
+		iconLbl.TextSize           = 22
+		iconLbl.TextXAlignment     = Enum.TextXAlignment.Right
+		iconLbl.Parent             = cell
 	end
-
-	-- Secondary stats
-	local secondaryDefs = {
-		{ "ATK SPD",  string.format("%.1f/s", atkSpd), Color3.fromRGB(255,200,100) },
-		{ "MOVE SPD", tostring(moveSpd),                Color3.fromRGB(200,160,255) },
-	}
-	for i, s in ipairs(secondaryDefs) do
-		local row = Instance.new("Frame")
-		row.Size = UDim2.new(1,-20,0,18); row.Position = UDim2.new(0,10,0,76+(i-1)*20)
-		row.BackgroundTransparency = 1; row.Parent = panel
-		lbl(s[1], UDim2.new(0,0,0,0), UDim2.new(0.5,0,1,0),
-			Color3.fromRGB(140,140,150), Enum.Font.Gotham).Parent = row
-		local v = lbl(s[2], UDim2.new(0.5,0,0,0), UDim2.new(0.5,0,1,0),
-			s[3], Enum.Font.Gotham, Enum.TextXAlignment.Right)
-		v.Parent = row
-	end
-
-	div(120)
-
-	-- === [Cleave] ===
-	lbl("[Cleave] - Basic Attack", UDim2.new(0,10,0,126), UDim2.new(1,-20,0,16),
-		Color3.fromRGB(255,220,100), Enum.Font.GothamBold)
-	lbl("Slash at the enemy, dealing 100% ATK.", UDim2.new(0,10,0,143), UDim2.new(1,-20,0,20),
-		Color3.fromRGB(180,180,190))
-
-	div(168)
-
-	-- === [Leaping Slash] with cooldown bar ===
-	lbl("[Leaping Slash] - Special", UDim2.new(0,10,0,174), UDim2.new(1,-20,0,16),
-		Color3.fromRGB(255,150,50), Enum.Font.GothamBold)
-	lbl("80% ATK frontal cone AOE. Triggers on PLACE and on MOVE (within leap range).",
-		UDim2.new(0,10,0,191), UDim2.new(1,-20,0,28),
-		Color3.fromRGB(180,180,190))
-
-	-- Cooldown bar
-	local cdFrame = Instance.new("Frame")
-	cdFrame.Name = "LeapCDFrame"
-	cdFrame.Size = UDim2.new(1, -20, 0, 14)
-	cdFrame.Position = UDim2.new(0, 10, 0, 222)
-	cdFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-	cdFrame.BorderSizePixel = 0; cdFrame.Parent = panel
-	Instance.new("UIStroke", cdFrame).Color = Color3.fromRGB(80, 60, 20)
-
-	local cdFill = Instance.new("Frame")
-	cdFill.Name = "CDFill"
-	cdFill.Size = UDim2.new(1, 0, 1, 0)
-	cdFill.BackgroundColor3 = Color3.fromRGB(255, 160, 40)
-	cdFill.BorderSizePixel = 0; cdFill.Parent = cdFrame
-
-	local cdText = Instance.new("TextLabel")
-	cdText.Name = "CDText"
-	cdText.Size = UDim2.new(1, 0, 1, 0)
-	cdText.BackgroundTransparency = 1
-	cdText.Text = "READY"
-	cdText.TextColor3 = Color3.fromRGB(255, 255, 255)
-	cdText.TextScaled = true
-	cdText.Font = Enum.Font.GothamBold
-	cdText.TextStrokeTransparency = 0.5; cdText.Parent = cdFrame
-
-	div(242)
-
-	-- === Move hint ===
-	local moveBtn = Instance.new("Frame")
-	moveBtn.Size = UDim2.new(1,-20,0,28); moveBtn.Position = UDim2.new(0,10,0,250)
-	moveBtn.BackgroundColor3 = Color3.fromRGB(50,90,160); moveBtn.BorderSizePixel = 0
-	moveBtn.Parent = panel
-	Instance.new("UIStroke", moveBtn).Color = Color3.fromRGB(80,130,200)
-	local mt = Instance.new("TextLabel")
-	mt.Size = UDim2.new(1,0,1,0); mt.BackgroundTransparency = 1
-	mt.Text = "Right-click to MOVE"
-	mt.TextColor3 = Color3.fromRGB(150,200,255); mt.TextScaled = true
-	mt.Font = Enum.Font.GothamBold; mt.Parent = moveBtn
-
-	-- === Relentless Advance ===
-	lbl("[Relentless Advance] - Move Skill", UDim2.new(0,10,0,286), UDim2.new(1,-20,0,16),
-		Color3.fromRGB(100,200,255), Enum.Font.GothamBold)
-	lbl("If dest within leap range & off CD: leap + Leaping Slash.",
-		UDim2.new(0,10,0,303), UDim2.new(1,-20,0,24),
-		Color3.fromRGB(180,180,190))
-
-	div(332)
-
-	-- === Passive: Survivor ===
-	lbl("Passive: SURVIVOR", UDim2.new(0,10,0,338), UDim2.new(1,-20,0,16),
-		Color3.fromRGB(100,220,150), Enum.Font.GothamBold)
-	lbl("Out of combat 3s → heal 2% max HP every 3s.",
-		UDim2.new(0,10,0,355), UDim2.new(1,-20,0,24),
-		Color3.fromRGB(150,150,160))
 
 	infoGui = gui
 end
@@ -548,58 +693,22 @@ RunService.RenderStepped:Connect(function(dt)
 
 		local panel = infoGui:FindFirstChild("Panel")
 		if panel then
-			-- State label
-			local sl = panel:FindFirstChild("StateLabel")
-			if sl then
-				local state = selectedTowerModel:GetAttribute("State") or "Idle"
-				sl.Text = state
-				sl.TextColor3 = state == "Moving" and Color3.fromRGB(255,200,100)
-					or state == "Attacking" and Color3.fromRGB(255,100,100)
-					or state == "Leaping" and Color3.fromRGB(255,150,50)
-					or Color3.fromRGB(100,200,255)
-			end
-
-			-- HP pill
-			local hpPill = panel:FindFirstChild("HPPill")
-			if hpPill then
-				local v = hpPill:FindFirstChild("Value")
+			-- Update ATK stat value in the bottom bar
+			local atkCell = panel:FindFirstChild("ATKStat", true)
+			if atkCell then
+				local v = atkCell:FindFirstChild("Value")
 				if v then
-					local hp = selectedTowerModel:GetAttribute("HP") or 0
-					local mhp = selectedTowerModel:GetAttribute("MaxHP") or 0
-					local newText = math.floor(hp).."/"..mhp.." HP"
-					if v.Text ~= newText then v.Text = newText end
+					local newAtk = tostring(selectedTowerModel:GetAttribute("ATK") or 0)
+					if v.Text ~= newAtk then v.Text = newAtk end
 				end
 			end
 
-			-- Cooldown bar for Leaping Slash
-			local cdFrame = panel:FindFirstChild("LeapCDFrame")
-			if cdFrame then
-				local cdFill = cdFrame:FindFirstChild("CDFill")
-				local cdText = cdFrame:FindFirstChild("CDText")
-
-				local cdEnd = selectedTowerModel:GetAttribute("LeapSlashCooldown") or 0
-				local maxCD = selectedTowerModel:GetAttribute("LeapSlashMaxCD") or 5
-				local now = tick()
-				local remaining = cdEnd - now
-
-				if remaining <= 0 then
-					-- Ready
-					if cdFill then
-						cdFill.Size = UDim2.new(1, 0, 1, 0)
-						cdFill.BackgroundColor3 = Color3.fromRGB(80, 200, 80)
-					end
-					if cdText then cdText.Text = "READY" end
-				else
-					-- On cooldown
-					local ratio = math.clamp(1 - (remaining / maxCD), 0, 1)
-					if cdFill then
-						cdFill.Size = UDim2.new(ratio, 0, 1, 0)
-						cdFill.BackgroundColor3 = Color3.fromRGB(255, 160, 40)
-					end
-					if cdText then
-						cdText.Text = string.format("%.1fs", remaining)
-					end
-				end
+			-- Update DMG label in the left box
+			local dmgLabel = panel:FindFirstChild("DMGLabel", true)
+			if dmgLabel then
+				local newAtk = tostring(selectedTowerModel:GetAttribute("ATK") or 0)
+				local expected = "DMG: " .. newAtk
+				if dmgLabel.Text ~= expected then dmgLabel.Text = expected end
 			end
 		end
 	elseif selectedTowerModel and not selectedTowerModel.Parent then
@@ -627,7 +736,7 @@ mouse.Button1Down:Connect(function()
 		if not canPlace then return end
 		local groundPos = raycastGround()
 		if groundPos then
-			placeRemote:FireServer(selectedTower, groundPos + Vector3.new(0, 3.5, 0))
+			placeRemote:FireServer(selectedTower, groundPos)
 			stopPlacing()
 		end
 		return

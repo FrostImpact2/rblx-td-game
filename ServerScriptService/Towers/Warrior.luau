@@ -359,8 +359,25 @@ function Warrior.CreateModel(position: Vector3, TowerStats: any, leapRangeMult: 
 	model:SetAttribute("LeapSlashMaxCD",    leapSlashCooldown)
 
 	model:PivotTo(CFrame.new(position))
-	circle.CFrame     = CFrame.new(position.X, position.Y - 2.5, position.Z) * CFrame.Angles(0, 0, math.rad(90))
-	leapCircle.CFrame = CFrame.new(position.X, position.Y - 2.6, position.Z) * CFrame.Angles(0, 0, math.rad(90))
+
+	-- Sit the model exactly on the ground by measuring the lowest non-decorative part
+	local lowestY = math.huge
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart")
+			and part.Name ~= "RangeCircle"
+			and part.Name ~= "LeapRangeCircle"
+		then
+			lowestY = math.min(lowestY, part.Position.Y - part.Size.Y / 2)
+		end
+	end
+	if lowestY < math.huge then
+		local lift = position.Y - lowestY
+		model:PivotTo(CFrame.new(Vector3.new(position.X, position.Y + lift, position.Z)))
+	end
+
+	local finalPos = model.PrimaryPart and model.PrimaryPart.Position or position
+	circle.CFrame     = CFrame.new(finalPos.X, finalPos.Y - 2.5, finalPos.Z) * CFrame.Angles(0, 0, math.rad(90))
+	leapCircle.CFrame = CFrame.new(finalPos.X, finalPos.Y - 2.6, finalPos.Z) * CFrame.Angles(0, 0, math.rad(90))
 
 	return model
 end
