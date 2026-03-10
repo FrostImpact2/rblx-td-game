@@ -19,7 +19,7 @@ local towersFolder  = Workspace:WaitForChild("Towers", 15)
 local enemiesFolder = Workspace:WaitForChild("Enemies", 15)
 
 local placing = false
-local selectedTower = "Deadeye"
+local selectedTower = "Warrior"
 local selectedTowerModel: Model? = nil
 local canPlace = false
 
@@ -33,6 +33,7 @@ local towerHpGuis = {}
 local towerBarAttachments = {}
 
 local PLACE_KEY_DEADEYE  = Enum.KeyCode.T   -- T → place Deadeye
+local PLACE_KEY_WARRIOR  = Enum.KeyCode.U
 local PLACE_KEY_VITALIST = Enum.KeyCode.Y   -- Y → place Vitalist
 local GHOST_TRANSPARENCY = 0.5
 local VALID_COLOR   = Color3.fromRGB(100, 255, 100)
@@ -616,6 +617,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		startPlacing("Deadeye")
 	elseif input.KeyCode == PLACE_KEY_VITALIST then
 		startPlacing("Vitalist")
+	elseif input.KeyCode == PLACE_KEY_WARRIOR then
+		startPlacing("Warrior")
 	end
 end)
 

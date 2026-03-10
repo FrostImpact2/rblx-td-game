@@ -14,13 +14,20 @@
 
 	  - Enhanced Attack – Nano Blast:
 	      Fires one large energy burst (hitscan laser from the gun barrel).
-	      ATK mode  : blue laser to the targeted enemy,   2× AP damage.
+	      ATK mode  : blue laser to the targeted enemy,   2× AP damage,
+	                  pierces all enemies along the beam.
 	      SUPP mode : green laser to the nearest ally tower, 2× AP healing.
 	      Resets Charge to 0; triggers a reload animation.
+	      VFX + damage fire only AFTER the enhanced-shoot animation ends.
 
 	  - Move Skill – Combat Protocol:
 	      On Move, if the destination is ≤ 8 studs from the tower,
 	      the tower switches between ATK and SUPP protocols.
+
+	Targeting
+	  ATK  : "First" – enemy with the highest WaypointIndex in range
+	          (ties broken by proximity).
+	  SUPP : nearest ally tower in range that is below MaxHP.
 
 	Animation state machine
 	  idle  →  raising  →  shoot_hold  →  (no target 3 s)  →  lowering  →  idle
@@ -58,7 +65,8 @@ Vitalist.MAX_CHARGE             = 40     -- charge needed for Nano Blast
 Vitalist.PROTOCOL_SWITCH_RANGE  = 8      -- studs; move within this → switch protocol
 Vitalist.GUN_RAISE_DELAY        = 0.15   -- seconds after raise before first shot
 Vitalist.GUN_LOWER_DELAY        = 3.0    -- seconds without a shot → lower gun
-Vitalist.BURST_SHOT_INTERVAL    = 0.065  -- seconds between individual burst shots
+Vitalist.BURST_SHOT_INTERVAL    = 0.065   -- seconds between individual burst shots
+Vitalist.NANO_PIERCE_RADIUS     = 4.5    -- studs off-axis; enemies within this are pierced
 
 -- ====== ANIMATION IDs ======
 local IDLE_ANIM_ID            = "rbxassetid://98169705964556"
@@ -97,6 +105,7 @@ local function getOrCreateAnimator(towerModel: Model): Animator?
 		end
 		return a
 	end
+	
 	local animCtrl = towerModel:FindFirstChildOfClass("AnimationController")
 	if animCtrl then
 		local a = animCtrl:FindFirstChildOfClass("Animator")
@@ -166,11 +175,63 @@ local function getAnimState(tower: Model)
 
 			reloading       = false,
 			bursting        = false,
+			burstEndTime    = 0,   -- earliest tick() a new burst may begin
 			lastShotTime    = -math.huge,
 			readyToFireTime = 0,
 		}
 	end
 	return animState[tower]
+end
+
+-- Returns the world position of the gun barrel, falling back to torso.
+-- Handles both Attachment (.WorldPosition) and BasePart (.Position).
+local function getBarrelPos(tower: Model): Vector3
+	local barrel = tower:FindFirstChild("GunBarrel", true)
+	if barrel then
+		if barrel:IsA("Attachment") then
+			return barrel.WorldPosition
+		elseif barrel:IsA("BasePart") then
+			return barrel.Position
+		end
+	end
+	local torso = tower.PrimaryPart
+	return torso and torso.Position or Vector3.zero
+end
+
+-- Returns every enemy in enemiesFolder whose centre lies within
+-- pierceRadius studs of the ray (origin → direction).
+-- Results are sorted nearest-first along the ray.
+local function getEnemiesAlongRay(
+	origin: Vector3,
+	direction: Vector3,
+	maxRange: number,
+	pierceRadius: number,
+	enemiesFolder: Folder
+): {Model}
+	local dir     = direction.Unit
+	local results = {}
+
+	for _, e in ipairs(enemiesFolder:GetChildren()) do
+		if e:IsA("Model") and e.PrimaryPart and (e:GetAttribute("HP") or 0) > 0 then
+			local toEnemy = e.PrimaryPart.Position - origin
+			local t       = toEnemy:Dot(dir)           -- signed distance along ray
+			if t >= 0 and t <= maxRange then
+				local closest = origin + dir * t
+				local off     = (e.PrimaryPart.Position - closest).Magnitude
+				if off <= pierceRadius then
+					table.insert(results, { enemy = e, t = t })
+				end
+			end
+		end
+	end
+
+	table.sort(results, function(a, b) return a.t < b.t end)
+
+	local enemies = {}
+	for _, r in ipairs(results) do
+		table.insert(enemies, r.enemy)
+	end
+	return enemies
 end
 
 -- ============================================================
@@ -306,7 +367,7 @@ function Vitalist.SpawnHitscanBeam(fromPos: Vector3, toPos: Vector3, color: Colo
 
 	local duration = isEnhanced and 0.45 or 0.12
 
-	-- Fade out the beam by tweening Width0/Width1 (NumberSequence cannot be tweened)
+	-- Fade out the beam by tweening Width0/Width1
 	TweenService:Create(beam,
 		TweenInfo.new(duration, Enum.EasingStyle.Quad),
 		{ Width0 = 0, Width1 = 0 }
@@ -330,7 +391,6 @@ end
 -- VFX – HIT / HEAL PARTICLES
 -- ============================================================
 
--- Called with green color for healing, blue color for damage.
 function Vitalist.SpawnHitParticles(position: Vector3, color: Color3)
 	local anchor = Instance.new("Part")
 	anchor.Name         = "VitalistHitAnchor"
@@ -427,10 +487,6 @@ function Vitalist.SpawnEnhancedHitVFX(position: Vector3, color: Color3)
 		{ Size = Vector3.new(0.05, 7, 7), Transparency = 1 }
 	):Play()
 
-	-- Centre flash
-
-
-
 	task.delay(0.9, function()
 		if ring   and ring.Parent   then ring:Destroy()   end
 		if anchor and anchor.Parent then anchor:Destroy() end
@@ -442,7 +498,72 @@ end
 -- ============================================================
 
 function Vitalist.SpawnMuzzleFlash(position: Vector3, color: Color3, isEnhanced: boolean?)
-	
+	-- Intentionally minimal; extend as needed.
+end
+
+-- ============================================================
+-- TARGETING
+-- ============================================================
+
+--[[
+	Returns the best target for this tower given its current protocol:
+
+	ATK  → enemy with the highest WaypointIndex in range
+	         (ties broken by closest distance).
+	SUPP → nearest ally tower in range that is BELOW its MaxHP.
+	         Towers at full health are skipped entirely.
+]]
+function Vitalist.FindTarget(
+	tower: Model,
+	enemiesFolder: Folder?,
+	towersFolder: Folder?
+): Model?
+	local protocol = tower:GetAttribute("Protocol") or "ATK"
+	local torso    = tower.PrimaryPart
+	if not torso then return nil end
+	local pos   = torso.Position
+	local range = tower:GetAttribute("RNG") or 20
+
+	if protocol == "ATK" then
+		local bestEnemy  = nil
+		local bestWP     = -math.huge
+		local bestDist   = math.huge
+
+		for _, e in ipairs(enemiesFolder and enemiesFolder:GetChildren() or {}) do
+			if e:IsA("Model") and e.PrimaryPart and (e:GetAttribute("HP") or 0) > 0 then
+				local d = (e.PrimaryPart.Position - pos).Magnitude
+				if d <= range then
+					local wp = e:GetAttribute("WaypointIndex") or 0
+					if wp > bestWP or (wp == bestWP and d < bestDist) then
+						bestWP    = wp
+						bestDist  = d
+						bestEnemy = e
+					end
+				end
+			end
+		end
+		return bestEnemy
+
+	else -- SUPP
+		local nearest  = nil
+		local nearDist = math.huge
+
+		for _, t in ipairs(towersFolder and towersFolder:GetChildren() or {}) do
+			if t:IsA("Model") and t ~= tower and t.PrimaryPart then
+				local hp    = t:GetAttribute("HP")    or 0
+				local maxHP = t:GetAttribute("MaxHP") or 1
+				-- Skip towers that are dead or already at full health
+				if hp > 0 and hp < maxHP then
+					local d = (t.PrimaryPart.Position - pos).Magnitude
+					if d <= range and d < nearDist then
+						nearDist = d
+						nearest  = t
+					end
+				end
+			end
+		end
+		return nearest
+	end
 end
 
 -- ============================================================
@@ -465,7 +586,7 @@ local function triggerGunRaise(tower: Model, st)
 	end
 
 	st.gunState     = "raising"
-	st.lastShotTime = tick()  -- prevent the lower-timer firing during the raise animation
+	st.lastShotTime = tick()  -- prevent the lower-timer firing during raise
 
 	safeStop(st.idleTrack,  0.12)
 	safeStop(st.lowerTrack, 0.1)
@@ -741,7 +862,6 @@ function Vitalist.TriggerProtocolSwitch(tower: Model)
 
 	local st = getAnimState(tower)
 
-	-- Play protocol-switch animation on top of current state
 	local animator = getOrCreateAnimator(tower)
 	if not animator then return end
 
@@ -752,7 +872,6 @@ function Vitalist.TriggerProtocolSwitch(tower: Model)
 	)
 	st.switchTrack = switchTrack
 
-	-- Update charge display colour
 	Vitalist.UpdateChargeDisplay(tower)
 end
 
@@ -781,7 +900,9 @@ function Vitalist.UpdateCombatState(tower: Model, hasTarget: boolean, target: In
 
 	if st.reloading or st.bursting then return end
 
-	-- Lower gun if no shot for GUN_LOWER_DELAY seconds
+	-- Lower gun if no shot for GUN_LOWER_DELAY seconds.
+	-- st.lastShotTime is updated per-bullet during bursts so this won't
+	-- fire mid-burst even at slow BURST_SHOT_INTERVAL values.
 	if (st.gunState == "shoot_hold" or st.gunState == "raised") and
 		(tick() - st.lastShotTime) >= Vitalist.GUN_LOWER_DELAY
 	then
@@ -822,8 +943,11 @@ end
 -- PUBLIC – ATTACK
 -- ============================================================
 
--- target is an enemy Model (ATK mode) or an ally tower Model (SUPP mode).
--- enemiesFolder and towersFolder are passed for enhanced-mode retargeting.
+--[[
+	target        : primary target (enemy Model in ATK, ally tower Model in SUPP).
+	enemiesFolder : used for Nano Blast pierce scan and retargeting.
+	towersFolder  : used for SUPP retargeting.
+]]
 function Vitalist.DoAttack(
 	tower: Model,
 	target: Model,
@@ -832,6 +956,7 @@ function Vitalist.DoAttack(
 ): boolean
 	local st = getAnimState(tower)
 	if st.reloading or st.bursting then return false end
+	if tick() < st.burstEndTime then return false end  -- enforce inter-burst gap
 
 	local atk      = tower:GetAttribute("ATK")        or 12
 	local ap       = tower:GetAttribute("AP")          or 18
@@ -842,7 +967,7 @@ function Vitalist.DoAttack(
 	local isEnhanced = (charge >= Vitalist.MAX_CHARGE)
 	local beamColor  = (protocol == "SUPP") and SUPP_COLOR or ATK_COLOR
 
-	-- Face the target
+	-- Face the primary target
 	local torso = tower.PrimaryPart
 	if torso and target.PrimaryPart then
 		local flatDir = Vector3.new(
@@ -858,98 +983,126 @@ function Vitalist.DoAttack(
 	-- ── ENHANCED: Nano Blast ──────────────────────────────────────────────
 	if isEnhanced then
 		tower:SetAttribute("Charge", 0)
+		Vitalist.UpdateChargeDisplay(tower)
 
-		-- For Nano Blast, retarget based on protocol
+		-- Resolve the primary blast target (SUPP: lowest-HP-ratio ally; ATK: first enemy)
 		local blastTarget = target
+		local blastRange  = tower:GetAttribute("RNG") * 2 or 40
+
 		if protocol == "SUPP" and towersFolder then
-			-- Nearest ally tower in range (lowest HP ratio)
-			local pos   = torso and torso.Position or Vector3.zero
-			local range = tower:GetAttribute("RNG") or 20
-			local bestHPRatio = math.huge
-			local bestTower   = nil
+			local pos          = torso and torso.Position or Vector3.zero
+			local bestHPRatio  = math.huge
+			local bestTower    = nil
 			for _, t in ipairs(towersFolder:GetChildren()) do
 				if t:IsA("Model") and t ~= tower and t.PrimaryPart then
-					local hp    = t:GetAttribute("HP") or 0
+					local hp    = t:GetAttribute("HP")    or 0
 					local maxHP = t:GetAttribute("MaxHP") or 1
 					local d     = (t.PrimaryPart.Position - pos).Magnitude
-					if d <= range and hp > 0 and hp / maxHP < bestHPRatio then
-						bestHPRatio = hp / maxHP
-						bestTower   = t
+					-- Only consider towers that are actually below max HP
+					if d <= blastRange and hp > 0 and hp < maxHP then
+						local ratio = hp / maxHP
+						if ratio < bestHPRatio then
+							bestHPRatio = ratio
+							bestTower   = t
+						end
 					end
 				end
 			end
 			if bestTower then blastTarget = bestTower end
+
 		elseif protocol == "ATK" and enemiesFolder then
-			-- Nearest enemy in range
-			local pos   = torso and torso.Position or Vector3.zero
-			local range = tower:GetAttribute("RNG") or 20
-			local nearest, nearDist = nil, math.huge
+			-- "First" targeting: highest WaypointIndex in range
+			local pos    = torso and torso.Position or Vector3.zero
+			local bestWP   = -math.huge
+			local bestDist = math.huge
+			local bestEnemy = nil
 			for _, e in ipairs(enemiesFolder:GetChildren()) do
 				if e:IsA("Model") and e.PrimaryPart and (e:GetAttribute("HP") or 0) > 0 then
 					local d = (e.PrimaryPart.Position - pos).Magnitude
-					if d <= range and d < nearDist then nearDist = d; nearest = e end
+					if d <= blastRange then
+						local wp = e:GetAttribute("WaypointIndex") or 0
+						if wp > bestWP or (wp == bestWP and d < bestDist) then
+							bestWP    = wp
+							bestDist  = d
+							bestEnemy = e
+						end
+					end
 				end
 			end
-			if nearest then blastTarget = nearest end
+			if bestEnemy then blastTarget = bestEnemy end
 		end
 
 		if not blastTarget or not blastTarget.Parent or not blastTarget.PrimaryPart then
 			return false
 		end
 
-		local impactPos = blastTarget.PrimaryPart.Position
-		local blastDmg  = ap * multi * 2
+		local blastDmg = ap * multi * 2
 
-		-- Apply effect
-		if protocol == "SUPP" then
-			local hp    = blastTarget:GetAttribute("HP")    or 0
-			local maxHP = blastTarget:GetAttribute("MaxHP") or 1
-			blastTarget:SetAttribute("HP", math.min(hp + blastDmg, maxHP))
-		else
-			local hp    = blastTarget:GetAttribute("HP") or 0
-			local newHP = hp - blastDmg
-			blastTarget:SetAttribute("HP", newHP)
-			if newHP <= 0 and blastTarget.Parent then
-				blastTarget:Destroy()
-			end
-		end
-
-		-- VFX
-		Vitalist.SpawnEnhancedHitVFX(impactPos, beamColor)
-		if torso then
-			local barrel  = tower:FindFirstChild("GunBarrel", true)
-			local fromPos = barrel and barrel.WorldPosition or torso.Position
-			Vitalist.SpawnMuzzleFlash(fromPos, beamColor, true)
-			Vitalist.SpawnHitscanBeam(fromPos, impactPos, beamColor, true)
-		end
-
-		-- Enhanced shoot animation → reload
+		-- Play the enhanced-shoot animation; fire everything AFTER it ends.
 		local animator = getOrCreateAnimator(tower)
-		if animator then
-			safeStop(st.gunIdleTrack, 0.1)
-			safeDestroy(st.enhShootTrack)
-			local enhTrack = loadAndPlay(
-				animator, ENHANCED_SHOOT_ANIM_ID, false,
-				Enum.AnimationPriority.Action4, 0.05
-			)
-			st.enhShootTrack = enhTrack
+		safeStop(st.gunIdleTrack, 0.1)
+		safeDestroy(st.enhShootTrack)
 
-			task.spawn(function()
-				if enhTrack then
-					if enhTrack.IsPlaying then enhTrack.Stopped:Wait() end
-				else
-					task.wait(0.3)
+		local enhTrack = animator and loadAndPlay(
+			animator, ENHANCED_SHOOT_ANIM_ID, false,
+			Enum.AnimationPriority.Action4, 0.05
+		) or nil
+		st.enhShootTrack = enhTrack
+
+		task.spawn(function()
+			-- Wait for animation to complete before firing VFX + damage
+			--if enhTrack then
+				--if enhTrack.IsPlaying then enhTrack.Stopped:Wait() end
+
+			--end
+
+			if not tower or not tower.Parent then return end
+
+			local fromPos = getBarrelPos(tower)
+
+			if protocol == "ATK" and enemiesFolder then
+				-- ── Pierce: find all enemies along the beam ──────────────────
+				local aimDir  = (blastTarget.PrimaryPart.Position - fromPos)
+				local pierced = getEnemiesAlongRay(fromPos, aimDir, blastRange, Vitalist.NANO_PIERCE_RADIUS, enemiesFolder)
+
+				-- Beam endpoint: extend to range in the aim direction
+				local beamEnd = fromPos + aimDir.Unit * blastRange
+
+				Vitalist.SpawnMuzzleFlash(fromPos, beamColor, true)
+				Vitalist.SpawnHitscanBeam(fromPos, beamEnd, beamColor, true)
+
+				for _, e in ipairs(pierced) do
+					if e and e.Parent and e.PrimaryPart then
+						local impactPos = e.PrimaryPart.Position
+						local hp        = e:GetAttribute("HP") or 0
+						local newHP     = hp - blastDmg
+						e:SetAttribute("HP", newHP)
+						Vitalist.SpawnEnhancedHitVFX(impactPos, beamColor)
+						if newHP <= 0 and e.Parent then
+							e:Destroy()
+						end
+					end
 				end
-				if tower and tower.Parent then
-					triggerReload(tower, st)
+
+			else
+				-- ── SUPP single-target heal ───────────────────────────────────
+				if blastTarget.Parent and blastTarget.PrimaryPart then
+					local impactPos = blastTarget.PrimaryPart.Position
+					local hp        = blastTarget:GetAttribute("HP")    or 0
+					local maxHP     = blastTarget:GetAttribute("MaxHP") or 1
+					blastTarget:SetAttribute("HP", math.min(hp + blastDmg, maxHP))
+					Vitalist.SpawnMuzzleFlash(fromPos, beamColor, true)
+					Vitalist.SpawnHitscanBeam(fromPos, impactPos, beamColor, true)
+					Vitalist.SpawnEnhancedHitVFX(impactPos, beamColor)
 				end
-			end)
-		else
-			triggerReload(tower, st)
-		end
+			end
+
+			if tower and tower.Parent then
+				triggerReload(tower, st)
+			end
+		end)
 
 		st.lastShotTime = tick()
-		Vitalist.UpdateChargeDisplay(tower)
 		return true
 	end
 
@@ -964,7 +1117,10 @@ function Vitalist.DoAttack(
 				if not tower or not tower.Parent then break end
 				if not target or not target.Parent then break end
 
-				-- Determine current target position (enemies move)
+				-- Refresh lastShotTime immediately so the gun-lower timer
+				-- cannot fire mid-burst regardless of BURST_SHOT_INTERVAL value.
+				st.lastShotTime = tick()
+
 				local targetPart = target.PrimaryPart
 				if not targetPart then break end
 				local impactPos = targetPart.Position
@@ -973,7 +1129,10 @@ function Vitalist.DoAttack(
 				if protocol == "SUPP" then
 					local hp    = target:GetAttribute("HP")    or 0
 					local maxHP = target:GetAttribute("MaxHP") or 1
-					target:SetAttribute("HP", math.min(hp + bulletDmg, maxHP))
+					-- Skip healing towers that are already at full health
+					if hp < maxHP then
+						target:SetAttribute("HP", math.min(hp + bulletDmg, maxHP))
+					end
 				else
 					local hp    = target:GetAttribute("HP") or 0
 					local newHP = hp - bulletDmg
@@ -984,13 +1143,10 @@ function Vitalist.DoAttack(
 					end
 				end
 
-				-- VFX
-				if torso then
-					local barrel  = tower:FindFirstChild("GunBarrel", true)
-					local fromPos = barrel and barrel.WorldPosition or torso.Position
-					Vitalist.SpawnMuzzleFlash(fromPos, beamColor, false)
-					Vitalist.SpawnHitscanBeam(fromPos, impactPos, beamColor, false)
-				end
+				-- VFX – always fire from the gun barrel
+				local fromPos = getBarrelPos(tower)
+				Vitalist.SpawnMuzzleFlash(fromPos, beamColor, false)
+				Vitalist.SpawnHitscanBeam(fromPos, impactPos, beamColor, false)
 				if target then
 					Vitalist.SpawnHitParticles(impactPos, beamColor)
 				end
@@ -1003,6 +1159,10 @@ function Vitalist.DoAttack(
 				tower:SetAttribute("Charge", newCharge)
 				Vitalist.UpdateChargeDisplay(tower)
 
+				-- Update lastShotTime each bullet so the gun-lower timer
+				-- cannot trigger mid-burst even at slow BURST_SHOT_INTERVAL values.
+				st.lastShotTime = tick()
+
 				if i < Vitalist.BULLETS_PER_BURST then
 					task.wait(Vitalist.BURST_SHOT_INTERVAL)
 				end
@@ -1013,7 +1173,11 @@ function Vitalist.DoAttack(
 			warn("[Vitalist] Burst loop error:", err)
 		end
 
-		-- Always reset these regardless of any error inside the loop
+		-- Enforce a rest gap equal to the full burst duration before the next burst.
+		-- This prevents the external attack loop from immediately re-triggering when
+		-- BURST_SHOT_INTERVAL is set higher than the default 0.065 s.
+		local burstDuration = Vitalist.BULLETS_PER_BURST * Vitalist.BURST_SHOT_INTERVAL
+		st.burstEndTime = tick() + burstDuration
 		st.bursting     = false
 		st.lastShotTime = tick()
 	end)
