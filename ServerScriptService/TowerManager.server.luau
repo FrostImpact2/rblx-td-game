@@ -29,6 +29,11 @@ local Vitalist  = require(script.Parent:WaitForChild("Towers"):WaitForChild("Vit
 -- Enemy modules
 local BasicZombie = require(script.Parent:WaitForChild("Enemies"):WaitForChild("BasicZombie", 10))
 
+-- Damage indicator remote  (clients listen to this)
+local damageIndicatorRemote      = Instance.new("RemoteEvent")
+damageIndicatorRemote.Name       = "ShowDamageIndicator"
+damageIndicatorRemote.Parent     = ReplicatedStorage
+
 -- ============================================================
 -- TOWER-MODULE ROUTER
 -- ============================================================
@@ -596,6 +601,8 @@ RunService.Heartbeat:Connect(function()
 					locked = findHeadhunterTarget(tower, target)
 					hhLockedTarget[tower] = locked
 				end
+				
+				
 
 				-- Drive the animation state machine toward the LOCKED target so the
 				-- gun raises and faces the correct enemy during the full aim window.
@@ -648,12 +655,21 @@ RunService.Heartbeat:Connect(function()
 			target:SetAttribute("HP", enemyHP - damage)
 			Warrior.PlayAttackAnimation(tower, target)
 
+			-- After: target:SetAttribute("HP", enemyHP - damage)
+			damageIndicatorRemote:FireAllClients(
+				target.PrimaryPart.Position,
+				damage,
+				"Normal"
+			)
+
 			if target.PrimaryPart then
 				Warrior.SpawnHitParticles(target.PrimaryPart.Position, Color3.fromRGB(255, 80, 80))
 			end
 
 			if (enemyHP - damage) <= 0 then target:Destroy() end
 		end
+		
+		
 	end
 
 	-- === SCAN FOR NEW AGGRO ===

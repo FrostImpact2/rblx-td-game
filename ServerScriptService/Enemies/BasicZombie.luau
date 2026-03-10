@@ -205,6 +205,13 @@ function BasicZombie.AttackTower(
 
 		if newHP <= 0 then tower:Destroy() end
 	end)
+	
+	local indicatorRemote = game:GetService("ReplicatedStorage"):FindFirstChild("ShowDamageIndicator")
+	if indicatorRemote and tower and tower.PrimaryPart then
+		indicatorRemote:FireAllClients(tower.PrimaryPart.Position, atk, "Enemy")
+	end
+
+	
 end
 
 -- ============================================================

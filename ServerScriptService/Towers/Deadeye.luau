@@ -1335,6 +1335,14 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 		if newHP <= 0 and actualTarget.Parent then
 			actualTarget:Destroy()
 		end
+		
+		local indicatorRemote = game:GetService("ReplicatedStorage"):FindFirstChild("ShowDamageIndicator")
+		if indicatorRemote then
+			local kind = isEnhanced and "Critical" or "Normal"
+			indicatorRemote:FireAllClients(impactPos, damage, kind)
+		end
+		
+		-- After applying HP damage:
 
 		-- ── Enhanced VFX ──
 		Deadeye.SpawnEnhancedHitVFX(impactPos)
@@ -1379,6 +1387,12 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 		actualTarget:SetAttribute("HP", newHP)
 		if newHP <= 0 and actualTarget.Parent then
 			actualTarget:Destroy()
+		end
+		
+		local indicatorRemote = game:GetService("ReplicatedStorage"):FindFirstChild("ShowDamageIndicator")
+		if indicatorRemote then
+			local kind = isEnhanced and "Critical" or "Normal"
+			indicatorRemote:FireAllClients(impactPos, damage, kind)
 		end
 
 		-- Grey out the fired bullet slot
