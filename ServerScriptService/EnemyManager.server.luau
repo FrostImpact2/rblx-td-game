@@ -184,8 +184,33 @@ local function spawnWave(templateName: string, count: number, delayBetween: numb
 end
 
 -- ============================================================
--- START
+-- START  (waits for GameState = "InRound" before spawning)
 -- ============================================================
+
+-- GameStateManager creates this value; wait up to 30 s for it to appear.
+local gameStateValue = ReplicatedStorage:WaitForChild("GameState", 30)
+
+local function waitForInRound()
+	if gameStateValue and gameStateValue.Value ~= "InRound" then
+		print("[EnemyManager] Waiting for InRound state...")
+		while gameStateValue.Value ~= "InRound" do
+			gameStateValue.Changed:Wait()
+		end
+	end
+end
+
+waitForInRound()
+
+if gameStateValue then
+	-- Re-trigger wave each time the state cycles back to InRound
+	gameStateValue.Changed:Connect(function(newState: string)
+		if newState == "InRound" then
+			print("[EnemyManager] State changed to InRound – starting wave!")
+			task.wait(3)
+			spawnWave("BasicZombie", 10, 2)
+		end
+	end)
+end
 
 print("[EnemyManager] Starting in 3 seconds...")
 task.wait(3)
