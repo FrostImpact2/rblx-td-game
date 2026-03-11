@@ -969,7 +969,8 @@ local function startVitalistAiming(towerModel: Model)
 
 	local rect = Instance.new("Part")
 	rect.Name         = "VitalistAimRect"
-	rect.Size         = Vector3.new(VITALIST_RANGE, 0.15, VITALIST_PIERCE_RADIUS * 2)
+	-- Size is set in RenderStepped using the tower's live RNG attribute
+	rect.Size         = Vector3.new(VITALIST_PIERCE_RADIUS * 2, 0.15, VITALIST_RANGE)
 	rect.Color        = Color3.fromRGB(50, 150, 255)
 	rect.Transparency = 0.45
 	rect.Material     = Enum.Material.Neon
@@ -983,6 +984,16 @@ local function startVitalistAiming(towerModel: Model)
 	vitalistAimConnection = RunService.RenderStepped:Connect(function()
 		if not vitalistAiming then return end
 		if not vitalistAimTower or not vitalistAimTower.PrimaryPart then return end
+
+		-- Use 2× the tower's current RNG so the indicator matches the actual blast range
+		local towerRng = vitalistAimTower:GetAttribute("RNG") or TOWER_RANGE_STUDS.Vitalist or 20
+		local aimRange = towerRng * 2
+
+		-- Match indicator colour to the active protocol
+		local protocol = vitalistAimTower:GetAttribute("Protocol") or "ATK"
+		rect.Color = (protocol == "SUPP")
+			and Color3.fromRGB(50, 220, 80)   -- green for SUPP
+			or  Color3.fromRGB(50, 150, 255)  -- blue  for ATK
 
 		local groundPos = raycastGround()
 		local tPos = vitalistAimTower.PrimaryPart.Position
@@ -999,11 +1010,15 @@ local function startVitalistAiming(towerModel: Model)
 			aimDir = Vector3.new(0, 0, 1)
 		end
 
-		-- Position rectangle centered halfway along the range, flat on the ground
+		-- Narrow (width = pierce diameter) at the tower end; length extends outward.
+		-- Size.X = width (perpendicular to aim), Size.Z = length (along aim direction).
+		-- Center is placed at half the range from the tower so the near edge starts
+		-- exactly at the tower's primary part position (no gap).
+		rect.Size = Vector3.new(VITALIST_PIERCE_RADIUS * 2, 0.15, aimRange)
 		local centerPos = Vector3.new(
-			tPos.X + aimDir.X * (VITALIST_RANGE / 2),
+			tPos.X + aimDir.X * (aimRange / 2),
 			tPos.Y - 2.3,
-			tPos.Z + aimDir.Z * (VITALIST_RANGE / 2)
+			tPos.Z + aimDir.Z * (aimRange / 2)
 		)
 		local lookAt = centerPos + aimDir
 		rect.CFrame = CFrame.new(centerPos, lookAt)

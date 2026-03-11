@@ -617,10 +617,9 @@ RunService.Heartbeat:Connect(function()
 		if not target then
 			-- No target: clear locked HH target, hide aim laser, and tick Deadeye animation
 			if towerType == "Deadeye" then
-				-- Exception: if Deadeye is enhanced and has a dynamite in range, keep targeting it
-				local count2   = tower:GetAttribute("BasicAttackCount") or 0
-				local enhanced = count2 >= Deadeye.ENHANCE_AFTER
-				local dynaTemp = enhanced and Deadeye.GetDynamite(tower) or nil
+				-- Exception: if Deadeye has a dynamite placed and in range, auto-fire it.
+				-- No enhancement required here — the player chose to deploy dynamite.
+				local dynaTemp = Deadeye.GetDynamite(tower)
 				local torsoT   = tower.PrimaryPart
 				if dynaTemp and torsoT then
 					local dynRange = tower:GetAttribute("RNG") or 30
