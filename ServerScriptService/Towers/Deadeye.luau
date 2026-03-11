@@ -60,9 +60,10 @@ Deadeye.GUN_RAISE_DELAY        = 0.15   -- seconds after raise finishes before f
 Deadeye.GUN_LOWER_DELAY        = 3.0    -- seconds without a shot → lower gun
 Deadeye.BULLET_SPEED           = 180    -- studs / second
 Deadeye.HEADHUNTER_AIM_TIME    = 0.65   -- ← seconds Headhunter holds the laser before firing
-Deadeye.DYNAMITE_RANGE         = 8      -- max studs from tower where dynamite can be placed
+Deadeye.DYNAMITE_RANGE         = 20     -- max studs from tower where dynamite can be placed
 Deadeye.DYNAMITE_EXPLOSION_RADIUS = 10  -- AoE radius of the dynamite explosion
 Deadeye.DYNAMITE_BURN_DURATION = 3      -- seconds enemies burn after the explosion
+Deadeye.STRIKE_SKILL_COOLDOWN  = 12     -- seconds between Strike Skill uses
 
 -- ====== ANIMATION IDs ======
 local IDLE_ANIM_ID     = "rbxassetid://130403916615858"
@@ -87,9 +88,10 @@ local baseC0s    = {}   -- tower → stored Motor6D C0 values
 local walkTracks = {}   -- tower → active walk AnimationTrack
 local bulletGuis = {}   -- tower → { billboard, labels[], usingImages }
 
-local headhunterAimStart = {}  -- tower → tick() when lock-on began
-local aimBeams           = {}  -- tower → aim-laser data
-local dynamiteModels     = {}  -- tower → dynamite Model (or nil)
+local headhunterAimStart  = {}  -- tower → tick() when lock-on began
+local aimBeams            = {}  -- tower → aim-laser data
+local dynamiteModels      = {}  -- tower → dynamite Model (or nil)
+local strikeSkillLastUsed = {}  -- tower → tick() when Strike Skill was last activated
 
 -- ============================================================
 -- INTERNAL HELPERS
@@ -1339,13 +1341,13 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 		if newHP <= 0 and actualTarget.Parent then
 			actualTarget:Destroy()
 		end
-		
+
 		local indicatorRemote = game:GetService("ReplicatedStorage"):FindFirstChild("ShowDamageIndicator")
 		if indicatorRemote then
 			local kind = isEnhanced and "Critical" or "Normal"
 			indicatorRemote:FireAllClients(impactPos, damage, kind)
 		end
-		
+
 		-- After applying HP damage:
 
 		-- ── Enhanced VFX ──
@@ -1392,7 +1394,7 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 		if newHP <= 0 and actualTarget.Parent then
 			actualTarget:Destroy()
 		end
-		
+
 		local indicatorRemote = game:GetService("ReplicatedStorage"):FindFirstChild("ShowDamageIndicator")
 		if indicatorRemote then
 			local kind = isEnhanced and "Critical" or "Normal"
@@ -1407,7 +1409,11 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 
 		if torso then
 			local barrel  = tower:FindFirstChild("GunBarrel", true)
-			local fromPos = barrel and barrel.WorldPosition or torso.Position
+			local fromPos = tower:FindFirstChild("GunBarrel", true)
+				and (tower:FindFirstChild("GunBarrel", true):IsA("Attachment")
+					and tower:FindFirstChild("GunBarrel", true).WorldPosition
+					or  tower:FindFirstChild("GunBarrel", true).Position)
+				or torso.Position
 			Deadeye.SpawnBarrelFlash(fromPos, false)
 			Deadeye.SpawnBullet(fromPos, impactPos, false)
 		end
@@ -1424,6 +1430,43 @@ end
 -- STRIKE SKILL – DYNAMITE
 -- ============================================================
 
+-- Returns true if the Strike Skill is off cooldown.
+function Deadeye.CanUseStrikeSkill(tower: Model): boolean
+	local last = strikeSkillLastUsed[tower] or -math.huge
+	return (tick() - last) >= Deadeye.STRIKE_SKILL_COOLDOWN
+end
+
+-- Primary entry-point for TowerManager / UI to trigger the Strike Skill.
+-- Clamps the requested position to DYNAMITE_RANGE, places the dynamite,
+-- and starts the cooldown.  Returns true on success.
+function Deadeye.ActivateStrikeSkill(tower: Model, position: Vector3): boolean
+	if not Deadeye.CanUseStrikeSkill(tower) then
+		return false
+	end
+
+	local torso = tower.PrimaryPart
+	if not torso then return false end
+
+	-- Clamp horizontally to DYNAMITE_RANGE
+	local offset = Vector3.new(
+		position.X - torso.Position.X,
+		0,
+		position.Z - torso.Position.Z
+	)
+	if offset.Magnitude > Deadeye.DYNAMITE_RANGE then
+		offset = offset.Unit * Deadeye.DYNAMITE_RANGE
+	end
+	local clampedPos = Vector3.new(
+		torso.Position.X + offset.X,
+		position.Y,
+		torso.Position.Z + offset.Z
+	)
+
+	strikeSkillLastUsed[tower] = tick()
+	Deadeye.PlaceDynamite(tower, clampedPos)
+	return true
+end
+
 -- Creates and places a dynamite at the given world position.
 -- The dynamite is a visible Model that the Headhunter will auto-target.
 function Deadeye.PlaceDynamite(tower: Model, position: Vector3)
@@ -1432,10 +1475,13 @@ function Deadeye.PlaceDynamite(tower: Model, position: Vector3)
 
 	local model = Instance.new("Model")
 	model.Name  = "DynamiteBomb"
-	model:SetAttribute("IsDynamite",   true)
+	model:SetAttribute("IsDynamite",    true)
 	model:SetAttribute("DynamiteOwner", tower:GetFullName())
 
-	-- Main body (cylinder)
+	-- Main body (horizontal cylinder lying on the ground).
+	-- Size = (1.2, 0.6, 0.6). After CFrame.Angles(0,0,90°) the cylinder's
+	-- length axis becomes world-X and its world-Y extent is 0.6 (±0.3).
+	-- We lift the centre by 0.3 studs so the bottom sits exactly on the ground.
 	local body = Instance.new("Part")
 	body.Name         = "Body"
 	body.Shape        = Enum.PartType.Cylinder
@@ -1445,7 +1491,7 @@ function Deadeye.PlaceDynamite(tower: Model, position: Vector3)
 	body.Anchored     = true
 	body.CanCollide   = false
 	body.CastShadow   = false
-	body.CFrame       = CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90))
+	body.CFrame       = CFrame.new(position + Vector3.new(0, 0.3, 0)) * CFrame.Angles(0, 0, math.rad(90))
 	body.Parent       = model
 	model.PrimaryPart = body
 
@@ -1456,7 +1502,7 @@ function Deadeye.PlaceDynamite(tower: Model, position: Vector3)
 	light.Range      = 6
 	light.Parent     = body
 
-	-- Fuse glow particle
+	-- Fuse glow particle (sits above the cylinder after rotation)
 	local fatt = Instance.new("Attachment")
 	fatt.Position = Vector3.new(0.62, 0, 0)
 	fatt.Parent   = body
@@ -1576,12 +1622,12 @@ function Deadeye.SpawnExplosionVFX(position: Vector3)
 	):Play()
 
 	-- Point light flash
-	local light = Instance.new("PointLight")
-	light.Brightness = 6
-	light.Color      = Color3.fromRGB(255, 180, 60)
-	light.Range      = 20
-	light.Parent     = anchor
-	TweenService:Create(light, TweenInfo.new(0.6), { Brightness = 0 }):Play()
+	local plight = Instance.new("PointLight")
+	plight.Brightness = 6
+	plight.Color      = Color3.fromRGB(255, 180, 60)
+	plight.Range      = 20
+	plight.Parent     = anchor
+	TweenService:Create(plight, TweenInfo.new(0.6), { Brightness = 0 }):Play()
 
 	task.delay(1.2, function()
 		if anchor and anchor.Parent then anchor:Destroy() end
@@ -1669,7 +1715,8 @@ function Deadeye.CleanupTower(tower: Model)
 	end
 
 	Deadeye.HideAimLaser(tower)
-	headhunterAimStart[tower] = nil
+	headhunterAimStart[tower]  = nil
+	strikeSkillLastUsed[tower] = nil
 	Deadeye.RemoveDynamite(tower)
 end
 
