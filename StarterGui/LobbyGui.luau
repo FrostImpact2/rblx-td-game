@@ -540,7 +540,7 @@ saleBadge.ZIndex = 10
 saleBadge.Parent = gachaTile
 makeCorner(saleBadge, 4)
 
-local saleLbl = makeLabel(saleBadge, "SUMMER SALE! 🔥",
+local saleLbl = makeLabel(saleBadge, "Very Cool",
 	UDim2.new(1, -8, 1, 0), UDim2.new(0, 4, 0, 0),
 	C.WHITE, nil, 1)
 saleLbl.TextSize = 14

@@ -215,4 +215,9 @@ end
 print("[EnemyManager] Starting in 3 seconds...")
 task.wait(3)
 print("[EnemyManager] SPAWNING WAVE!")
-spawnWave("BasicZombie", 10, 2)
+spawnWave("BasicZombie", 5, 2)
+task.wait(3)
+spawnWave("FastDummy", 5, 2)
+task.wait(3)
+spawnWave("TankyDummy", 5, 4)
+

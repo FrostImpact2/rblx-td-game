@@ -41,7 +41,31 @@ EnemyStats.Templates = {
 		RNG        = "VERY SHORT",
 		TARGETING  = "CLOSEST",
 	},
+	
+	["FastDummy"] = {
+		ATK        = 3,
+		ATK_SPD    = "FAST",
+		MOVE_SPD   = "FAST",
+		HP         = 30,
+		RNG        = "VERY SHORT",
+		TARGETING  = "CLOSEST",
+	},
+	
+	["TankyDummy"] = {
+		ATK        = 7,
+		ATK_SPD    = "SLOW",
+		MOVE_SPD   = "SLOW",
+		HP         = 70,
+		RNG        = "VERY SHORT",
+		TARGETING  = "CLOSEST",
+	},
+	
 }
+
+
+
+
+
 
 function EnemyStats.ResolveMoveSpd(tierName: string): number
 	return EnemyStats.MoveSpdTiers[tierName] or EnemyStats.MoveSpdTiers["MEDIUM"]
