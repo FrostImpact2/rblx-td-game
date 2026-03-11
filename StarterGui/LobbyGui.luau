@@ -1533,4 +1533,3 @@ end
 buildTowerListEntries()
 switchQuestTab("Daily")
 switchBanner("standard")
-switchBanner("standard")
