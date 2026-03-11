@@ -727,7 +727,7 @@ RunService.Heartbeat:Connect(function()
 					triggerDynamiteExplosion(tower, locked)
 					Deadeye.RemoveDynamite(tower)
 				else
-					Deadeye.DoAttack(tower, target, enemiesFolder)
+					Deadeye.DoAttack(tower, locked, enemiesFolder)
 				end
 
 			else
@@ -942,7 +942,18 @@ strikeSkillRemote.OnServerEvent:Connect(function(player: Player, tower: Model, s
 		Deadeye.PlaceDynamite(tower, snapPos)
 
 	elseif skillName == "NanoBlast" and towerType == "Vitalist" then
-		Vitalist.FireNanoBlast(tower, enemiesFolder, towersFolder)
+		if not Vitalist.IsNanoBlastReady(tower) then return end
+		-- Charge gate: only fire when fully charged
+		if (tower:GetAttribute("Charge") or 0) < Vitalist.MAX_CHARGE then return end
+		local inputDirection = typeof(position) == "Vector3" and position or nil
+		local flatDir: Vector3 = Vector3.new(0, 0, 1)
+		if inputDirection then
+			local d = Vector3.new(inputDirection.X, 0, inputDirection.Z)
+			if d.Magnitude >= 0.5 then
+				flatDir = d.Unit
+			end
+		end
+		Vitalist.FireNanoBlast(tower, flatDir, enemiesFolder, towersFolder)
 	end
 end)
 
