@@ -249,64 +249,101 @@ end
 -- CHARGE & AMMO DISPLAY
 -- ============================================================
 
--- Updates (or creates) a BillboardGui named "ChargeDisplay" showing the current charge.
+-- Updates (or creates) a world-anchored BillboardGui showing the current charge.
+-- Uses an Attachment on PrimaryPart with stud-based size (identical approach to the
+-- client-side HP bar) so the bar does not scale with camera distance.
 function Vitalist.UpdateChargeDisplay(tower: Model)
-	local charge = tower:GetAttribute("Charge") or 0
-	local head = tower:FindFirstChild("Head") or tower.PrimaryPart
-	if not head or not head:IsA("BasePart") then return end
+	local charge   = tower:GetAttribute("Charge")   or 0
+	local protocol = tower:GetAttribute("Protocol") or "ATK"
+	local root     = tower.PrimaryPart
+	if not root then return end
 
-	local gui = head:FindFirstChild("ChargeDisplay")
-	if not gui then
-		gui = Instance.new("BillboardGui")
-		gui.Name            = "ChargeDisplay"
-		gui.Size            = UDim2.new(0, 100, 0, 28)
-		gui.StudsOffset     = Vector3.new(0, 3.2, 0)
-		gui.AlwaysOnTop     = false
-		gui.LightInfluence  = 0
-		gui.ResetOnSpawn    = false
-		gui.Parent          = head
+	-- Determine bar colour from protocol mode
+	local fillColor: Color3
+	if charge >= Vitalist.MAX_CHARGE then
+		-- Fully charged: bright golden flash regardless of mode
+		fillColor = Color3.fromRGB(255, 240, 60)
+	elseif protocol == "SUPP" then
+		fillColor = SUPP_COLOR   -- green
+	else
+		fillColor = ATK_COLOR    -- blue
+	end
+
+	-- Locate or create the anchor Attachment + BillboardGui on the tower Model
+	local att = root:FindFirstChild("ChargeBarAnchor")
+	local gui = tower:FindFirstChild("ChargeDisplay")
+
+	if not att or not gui then
+		-- Remove stale instances if only one exists
+		if att then att:Destroy() end
+		if gui then gui:Destroy() end
+
+		-- Position the attachment above the model's bounding box (above the HP bar)
+		att      = Instance.new("Attachment")
+		att.Name = "ChargeBarAnchor"
+		local cf, sz = tower:GetBoundingBox()
+		local topWorld = cf.Position + Vector3.new(0, sz.Y / 2 + 2.3, 0)
+		att.Position = root.CFrame:PointToObjectSpace(topWorld)
+		att.Parent   = root
+
+		-- BillboardGui sized in studs (Scale) so it is fixed-size in world space
+		gui                  = Instance.new("BillboardGui")
+		gui.Name             = "ChargeDisplay"
+		gui.Adornee          = att
+		gui.Size             = UDim2.new(4, 0, 0.35, 0)
+		gui.AlwaysOnTop      = true
+		gui.LightInfluence   = 0
+		gui.ResetOnSpawn     = false
+		gui.Parent           = tower
+
+		local outline = Instance.new("Frame")
+		outline.Name             = "Outline"
+		outline.Size             = UDim2.new(1, 0, 1, 0)
+		outline.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+		outline.BorderSizePixel  = 0
+		outline.Parent           = gui
 
 		local bg = Instance.new("Frame")
 		bg.Name             = "BG"
-		bg.Size             = UDim2.new(1, 0, 0.55, 0)
-		bg.Position         = UDim2.new(0, 0, 0, 0)
+		bg.Size             = UDim2.new(1, -2, 1, -2)
+		bg.Position         = UDim2.new(0, 1, 0, 1)
 		bg.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 		bg.BorderSizePixel  = 0
-		bg.Parent           = gui
+		bg.Parent           = outline
 
 		local fill = Instance.new("Frame")
 		fill.Name             = "Fill"
 		fill.Size             = UDim2.new(0, 0, 1, 0)
-		fill.BackgroundColor3 = Color3.fromRGB(255, 200, 0)
+		fill.BackgroundColor3 = fillColor
 		fill.BorderSizePixel  = 0
 		fill.Parent           = bg
 
 		local label = Instance.new("TextLabel")
-		label.Name            = "ChargeLabel"
-		label.Size            = UDim2.new(1, 0, 0.45, 0)
-		label.Position        = UDim2.new(0, 0, 0.55, 0)
+		label.Name                 = "ChargeLabel"
+		label.Size                 = UDim2.new(1, 0, 1, 0)
 		label.BackgroundTransparency = 1
-		label.TextColor3      = Color3.fromRGB(255, 220, 80)
-		label.TextScaled      = true
-		label.Font            = Enum.Font.GothamBold
-		label.Text            = charge.."/"..Vitalist.MAX_CHARGE
-		label.Parent          = gui
+		label.TextColor3           = Color3.fromRGB(255, 255, 255)
+		label.TextScaled           = true
+		label.Font                 = Enum.Font.GothamBold
+		label.TextStrokeTransparency = 0.4
+		label.Text                 = charge.."/"..Vitalist.MAX_CHARGE
+		label.Parent               = bg
 	end
 
+	-- Update fill ratio and colour
 	local fillRatio = math.clamp(charge / Vitalist.MAX_CHARGE, 0, 1)
-	local bg    = gui:FindFirstChild("BG")
-	local label = gui:FindFirstChild("ChargeLabel")
+	local outline = gui:FindFirstChild("Outline")
+	local bg      = outline and outline:FindFirstChild("BG")
 	if bg then
 		local fill = bg:FindFirstChild("Fill")
 		if fill then
-			fill.Size = UDim2.new(fillRatio, 0, 1, 0)
-			fill.BackgroundColor3 = (charge >= Vitalist.MAX_CHARGE)
-				and Color3.fromRGB(255, 240, 60)
-				or  Color3.fromRGB(255, 200, 0)
+			fill.Size             = UDim2.new(fillRatio, 0, 1, 0)
+			fill.BackgroundColor3 = fillColor
 		end
-	end
-	if label then
-		label.Text = charge.."/"..Vitalist.MAX_CHARGE
+		local label = bg:FindFirstChild("ChargeLabel")
+		if label then
+			label.Text = charge.."/"..Vitalist.MAX_CHARGE
+		end
 	end
 end
 
@@ -926,6 +963,9 @@ function Vitalist.TriggerProtocolSwitch(tower: Model)
 		Enum.AnimationPriority.Action4, 0.1
 	)
 	st.switchTrack = switchTrack
+
+	-- Refresh the charge bar colour immediately to reflect the new mode
+	Vitalist.UpdateChargeDisplay(tower)
 end
 
 -- ============================================================
@@ -1162,7 +1202,7 @@ function Vitalist.FireNanoBlast(
 
 	local beamColor = (protocol == "SUPP") and SUPP_COLOR or ATK_COLOR
 	local blastDmg  = ap * multi * 2
-	local blastRange = tower:GetAttribute("RNG") or 20
+	local blastRange = (tower:GetAttribute("RNG") or 20) * 2
 
 	-- Record use time
 	nanoblastLastFire[tower] = tick()
@@ -1176,7 +1216,7 @@ function Vitalist.FireNanoBlast(
 
 	if protocol == "SUPP" and towersFolder then
 		local pos = torso and torso.Position or Vector3.zero
-		local suppRange = blastRange * 2  -- SUPP heals at 2× ATK range (wider support radius)
+		local suppRange = blastRange  -- blastRange is already RNG × 2; SUPP uses the same reach
 		local bestHPRatio = math.huge
 		for _, t in ipairs(towersFolder:GetChildren()) do
 			if t:IsA("Model") and t ~= tower and t.PrimaryPart then
