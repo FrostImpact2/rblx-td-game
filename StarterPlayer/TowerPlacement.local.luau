@@ -12,37 +12,38 @@ local player    = Players.LocalPlayer
 local mouse     = player:GetMouse()
 local playerGui = player:WaitForChild("PlayerGui")
 
-local placeRemote = ReplicatedStorage:WaitForChild("PlaceTower", 10)
-local moveRemote  = ReplicatedStorage:WaitForChild("MoveTower", 10)
-local strikeSkillRemote = ReplicatedStorage:WaitForChild("StrikeSkill", 10)
+local placeRemote       = ReplicatedStorage:WaitForChild("PlaceTower",   10)
+local moveRemote        = ReplicatedStorage:WaitForChild("MoveTower",    10)
+local strikeSkillRemote = ReplicatedStorage:WaitForChild("StrikeSkill",  10)
 
-local towersFolder  = Workspace:WaitForChild("Towers", 15)
+local towersFolder  = Workspace:WaitForChild("Towers",  15)
 local enemiesFolder = Workspace:WaitForChild("Enemies", 15)
 
-local placing = false
-local selectedTower = "Warrior"
+local placing             = false
+local selectedTower       = "Warrior"
 local selectedTowerModel: Model? = nil
-local canPlace = false
+local canPlace            = false
 
 -- Strike Skill aiming state (Dynamite)
-local strikeAiming       = false       -- true while aiming Dynamite placement
-local strikeTowerModel: Model? = nil   -- the Deadeye tower for which we're aiming
-local strikeGhost: Part? = nil         -- ghost indicator for Dynamite target
-local strikeCanPlace     = false       -- valid dynamite placement position
+local strikeAiming       = false
+local strikeTowerModel: Model? = nil
+local strikeGhost: Part?       = nil      -- main cylinder body
+local strikeRangeCircle: Part? = nil      -- flat range-indicator ring on the ground
+local strikeCanPlace     = false
 
 -- Strike Skill aiming state (Vitalist Nano Blast)
 local vitalistAiming    = false
-local vitalistAimTower: Model? = nil
-local vitalistAimRect: Part?   = nil
+local vitalistAimTower: Model?         = nil
+local vitalistAimRect: Part?           = nil
 local vitalistAimConnection: RBXScriptConnection? = nil
 
 local ghostFolder: Folder? = nil
-local ghostParts = {}
+local ghostParts    = {}
 local rangePreview: Part? = nil
 local ghostParented = false
 local updateConnection: RBXScriptConnection? = nil
 
-local towerHpGuis = {}
+local towerHpGuis        = {}
 local towerBarAttachments = {}
 
 local PLACE_KEY_DEADEYE  = Enum.KeyCode.T
@@ -50,11 +51,12 @@ local PLACE_KEY_WARRIOR  = Enum.KeyCode.U
 local PLACE_KEY_VITALIST = Enum.KeyCode.Y
 local STRIKE_SKILL_KEY   = Enum.KeyCode.Q
 local GHOST_TRANSPARENCY = 0.5
-local VALID_COLOR   = Color3.fromRGB(100, 255, 100)
-local INVALID_COLOR = Color3.fromRGB(255, 80, 80)
-local HP_BAR_GAP    = 1.5
+local VALID_COLOR        = Color3.fromRGB(100, 255, 100)
+local INVALID_COLOR      = Color3.fromRGB(255, 80,  80)
+local HP_BAR_GAP         = 1.5
 
-local DYNAMITE_RANGE = 8  -- must match Deadeye.DYNAMITE_RANGE on server
+-- Dynamite range is half the tower's RNG attribute (resolved at aim-start)
+local dynamiteRange      = 10   -- updated when aiming begins
 
 local TOWER_RANGE_STUDS = {
 	Warrior  = 8,
@@ -84,10 +86,15 @@ local function raycastGround(): Vector3?
 	params.FilterType = Enum.RaycastFilterType.Exclude
 
 	local ignoreList = {}
-	if ghostFolder then table.insert(ignoreList, ghostFolder) end
-	if enemiesFolder then table.insert(ignoreList, enemiesFolder) end
-	if towersFolder then table.insert(ignoreList, towersFolder) end
+	if ghostFolder    then table.insert(ignoreList, ghostFolder)    end
+	if enemiesFolder  then table.insert(ignoreList, enemiesFolder)  end
+	if towersFolder   then table.insert(ignoreList, towersFolder)   end
 	if player.Character then table.insert(ignoreList, player.Character) end
+
+	-- Ignore all dynamite/strike ghosts
+	if strikeGhost       and strikeGhost.Parent       then table.insert(ignoreList, strikeGhost)       end
+	if strikeRangeCircle and strikeRangeCircle.Parent then table.insert(ignoreList, strikeRangeCircle) end
+	if vitalistAimRect   and vitalistAimRect.Parent   then table.insert(ignoreList, vitalistAimRect)   end
 
 	for _, child in ipairs(Workspace:GetChildren()) do
 		local n = child.Name
@@ -112,12 +119,12 @@ end
 -- ============================================================
 
 local ghostPartDefs = {
-	{ "Torso",     Vector3.new(2, 2.4, 1.2), Vector3.new(0, 3.5, 0) },
-	{ "Head",      Vector3.new(1.4, 1.4, 1.4), Vector3.new(0, 5.6, 0) },
-	{ "LeftArm",   Vector3.new(0.8, 2.4, 1),   Vector3.new(-1.4, 3.3, 0) },
-	{ "RightArm",  Vector3.new(0.8, 2.4, 1),   Vector3.new(1.4, 3.3, 0) },
-	{ "LeftLeg",   Vector3.new(0.9, 2.4, 1),   Vector3.new(-0.5, 1.2, 0) },
-	{ "RightLeg",  Vector3.new(0.9, 2.4, 1),   Vector3.new(0.5, 1.2, 0) },
+	{ "Torso",    Vector3.new(2,   2.4, 1.2), Vector3.new( 0,    3.5, 0) },
+	{ "Head",     Vector3.new(1.4, 1.4, 1.4), Vector3.new( 0,    5.6, 0) },
+	{ "LeftArm",  Vector3.new(0.8, 2.4, 1),   Vector3.new(-1.4,  3.3, 0) },
+	{ "RightArm", Vector3.new(0.8, 2.4, 1),   Vector3.new( 1.4,  3.3, 0) },
+	{ "LeftLeg",  Vector3.new(0.9, 2.4, 1),   Vector3.new(-0.5,  1.2, 0) },
+	{ "RightLeg", Vector3.new(0.9, 2.4, 1),   Vector3.new( 0.5,  1.2, 0) },
 }
 
 local function destroyGhost()
@@ -165,7 +172,7 @@ local function updateGhostPosition()
 	canPlace = true
 	for _, data in ipairs(ghostParts) do
 		data.part.CFrame = CFrame.new(groundPos + data.offset)
-		data.part.Color = VALID_COLOR
+		data.part.Color  = VALID_COLOR
 	end
 	if rangePreview then
 		rangePreview.CFrame = CFrame.new(groundPos.X, groundPos.Y + 0.1, groundPos.Z)
@@ -191,11 +198,7 @@ local function showTowerRange(towerModel: Model)
 	local leapCircle = towerModel:FindFirstChild("LeapRangeCircle")
 	if leapCircle then
 		local cdEnd = towerModel:GetAttribute("LeapSlashCooldown") or 0
-		if tick() >= cdEnd then
-			leapCircle.Transparency = 0.8
-		else
-			leapCircle.Transparency = 0.92
-		end
+		leapCircle.Transparency = tick() >= cdEnd and 0.8 or 0.92
 		local torso = towerModel.PrimaryPart
 		if torso then
 			local pos = torso.Position
@@ -235,12 +238,8 @@ local function stopPlacing()
 end
 
 local function startPlacing(towerType: string)
-	-- Cancel strike aiming if active (connection will be replaced below)
 	if strikeAiming then
-		if strikeGhost and strikeGhost.Parent then strikeGhost:Destroy() end
-		strikeGhost      = nil
-		strikeAiming     = false
-		strikeTowerModel = nil
+		-- will be cleaned up below via stopStrikeAiming (declared later but fine here)
 	end
 	if placing and selectedTower == towerType then stopPlacing(); return end
 	selectedTower = towerType
@@ -276,7 +275,7 @@ local TOWER_PANEL_DATA = {
 		maxLevel     = 3,
 		strikeSkill  = {
 			name    = "DYNAMITE  [Q]",
-			desc    = "Place within 8 studs. Deadeye auto-targets it with Headhunter. Explodes for 0.6× ATK AoE + 0.2× AP/s fire (3s).",
+			desc    = "Place within half the tower's range. Deadeye auto-targets it with Headhunter. Explodes for 0.6× ATK AoE + 0.2× AP/s fire (3s).",
 			skillId = "Dynamite",
 		},
 	},
@@ -305,11 +304,9 @@ local TOWER_PANEL_DATA = {
 	},
 }
 
--- Panel dimensions
 local PANEL_W = 540
-local PANEL_H = 365  -- extra 55 px for the Strike Skill section
+local PANEL_H = 365
 
--- Helper: make a UICorner
 local function corner(parent, radius)
 	local c = Instance.new("UICorner")
 	c.CornerRadius = UDim.new(0, radius or 8)
@@ -317,7 +314,6 @@ local function corner(parent, radius)
 	return c
 end
 
--- Helper: make a TextLabel
 local function makeLabel(parent, props)
 	local l = Instance.new("TextLabel")
 	l.BackgroundTransparency = 1
@@ -327,7 +323,6 @@ local function makeLabel(parent, props)
 	return l
 end
 
--- Helper: make a Frame
 local function makeFrame(parent, props)
 	local f = Instance.new("Frame")
 	f.BorderSizePixel = 0
@@ -352,11 +347,9 @@ local function createInfoGui(towerModel: Model)
 	gui.DisplayOrder = 10
 	gui.Parent       = playerGui
 
-	-- ── Main panel (left side of screen) ────────────────────────────────────
 	local panel = Instance.new("Frame")
 	panel.Name             = "Panel"
 	panel.Size             = UDim2.new(0, PANEL_W, 0, PANEL_H)
-	-- Anchored to the bottom-left with a small margin
 	panel.Position         = UDim2.new(0, 14, 1, -(PANEL_H + 14))
 	panel.BackgroundColor3 = Color3.fromRGB(52, 57, 68)
 	panel.BorderSizePixel  = 0
@@ -364,19 +357,16 @@ local function createInfoGui(towerModel: Model)
 	panel.Parent           = gui
 	corner(panel, 10)
 
-	-- ── Title bar ───────────────────────────────────────────────────────────
 	local titleBg = makeFrame(panel, {
 		Size             = UDim2.new(1, 0, 0, 42),
 		BackgroundColor3 = Color3.fromRGB(68, 73, 86),
 	})
 	corner(titleBg, 10)
-	-- Cover bottom-rounded corners on title bar
 	makeFrame(titleBg, {
 		Size             = UDim2.new(1, 0, 0.5, 0),
 		Position         = UDim2.new(0, 0, 0.5, 0),
 		BackgroundColor3 = Color3.fromRGB(68, 73, 86),
 	})
-
 	makeLabel(titleBg, {
 		Size             = UDim2.new(1, -48, 1, 0),
 		Position         = UDim2.new(0, 0, 0, 0),
@@ -387,7 +377,6 @@ local function createInfoGui(towerModel: Model)
 		TextXAlignment   = Enum.TextXAlignment.Center,
 	})
 
-	-- Close (X) button
 	local closeBtn = Instance.new("TextButton")
 	closeBtn.Size             = UDim2.new(0, 42, 0, 42)
 	closeBtn.Position         = UDim2.new(1, -42, 0, 0)
@@ -401,7 +390,6 @@ local function createInfoGui(towerModel: Model)
 	corner(closeBtn, 8)
 	closeBtn.MouseButton1Click:Connect(deselectTower)
 
-	-- ── Portrait box (left) ──────────────────────────────────────────────────
 	local portraitBox = makeFrame(panel, {
 		Name             = "PortraitBox",
 		Size             = UDim2.new(0, 132, 0, 132),
@@ -410,7 +398,6 @@ local function createInfoGui(towerModel: Model)
 	})
 	corner(portraitBox, 7)
 
-	-- DMG label inside portrait box
 	makeLabel(portraitBox, {
 		Name           = "DMGLabel",
 		Size           = UDim2.new(1, 0, 0, 26),
@@ -422,7 +409,6 @@ local function createInfoGui(towerModel: Model)
 		TextXAlignment = Enum.TextXAlignment.Center,
 	})
 
-	-- Portrait image area
 	local portrait = Instance.new("ImageLabel")
 	portrait.Size                   = UDim2.new(1, -8, 0, 98)
 	portrait.Position               = UDim2.new(0, 4, 0, 28)
@@ -433,7 +419,6 @@ local function createInfoGui(towerModel: Model)
 	portrait.Parent                 = portraitBox
 	corner(portrait, 5)
 
-	-- ── Right section: upgrade info ─────────────────────────────────────────
 	local rightX = 152
 	local rightW = PANEL_W - rightX - 10
 
@@ -458,7 +443,6 @@ local function createInfoGui(towerModel: Model)
 		end
 	end
 
-	-- ── Level + next upgrade label ──────────────────────────────────────────
 	makeLabel(panel, {
 		Name           = "LevelLabel",
 		Size           = UDim2.new(0, 230, 0, 24),
@@ -481,18 +465,15 @@ local function createInfoGui(towerModel: Model)
 		TextTruncate   = Enum.TextTruncate.AtEnd,
 	})
 
-	-- Thin divider
 	makeFrame(panel, {
 		Size             = UDim2.new(1, -16, 0, 1),
 		Position         = UDim2.new(0, 8, 0, 228),
 		BackgroundColor3 = Color3.fromRGB(80, 86, 100),
 	})
 
-	-- ── Button row ──────────────────────────────────────────────────────────
-	local BTN_Y     = 232
-	local BTN_H     = 44
+	local BTN_Y = 232
+	local BTN_H = 44
 
-	-- Upgrade button (green)
 	local upgradeBtn = Instance.new("TextButton")
 	upgradeBtn.Size             = UDim2.new(0, 158, 0, BTN_H)
 	upgradeBtn.Position         = UDim2.new(0, 8, 0, BTN_Y)
@@ -505,14 +486,12 @@ local function createInfoGui(towerModel: Model)
 	upgradeBtn.Parent           = panel
 	corner(upgradeBtn, 7)
 
-	-- Target toggle box (blue, two stacked rows)
 	local targetBox = makeFrame(panel, {
 		Size             = UDim2.new(0, 112, 0, BTN_H),
 		Position         = UDim2.new(0, 174, 0, BTN_Y),
 		BackgroundColor3 = Color3.fromRGB(38, 102, 188),
 	})
 	corner(targetBox, 7)
-
 	makeLabel(targetBox, {
 		Name           = "TargetModeLabel",
 		Size           = UDim2.new(1, 0, 0.5, 0),
@@ -521,14 +500,12 @@ local function createInfoGui(towerModel: Model)
 		Font           = Enum.Font.GothamBold,
 		TextSize       = 12,
 	})
-
 	local targetBot = makeFrame(targetBox, {
 		Size             = UDim2.new(1, 0, 0.5, 0),
 		Position         = UDim2.new(0, 0, 0.5, 0),
 		BackgroundColor3 = Color3.fromRGB(48, 118, 208),
 	})
 	corner(targetBot, 7)
-	-- Cover top-rounded corners on bottom half
 	makeFrame(targetBot, {
 		Size             = UDim2.new(1, 0, 0.5, 0),
 		BackgroundColor3 = Color3.fromRGB(48, 118, 208),
@@ -541,7 +518,6 @@ local function createInfoGui(towerModel: Model)
 		TextSize       = 12,
 	})
 
-	-- Sell button (red)
 	local sellBtn = Instance.new("TextButton")
 	sellBtn.Size             = UDim2.new(0, 236, 0, BTN_H)
 	sellBtn.Position         = UDim2.new(0, 294, 0, BTN_Y)
@@ -554,7 +530,6 @@ local function createInfoGui(towerModel: Model)
 	sellBtn.Parent           = panel
 	corner(sellBtn, 7)
 
-	-- ── Bottom stats bar (inside the panel) ──────────────────────────────────
 	local STATS_Y = PANEL_H - 46
 	local statsBar = makeFrame(panel, {
 		Size             = UDim2.new(1, 0, 0, 46),
@@ -562,98 +537,46 @@ local function createInfoGui(towerModel: Model)
 		BackgroundColor3 = Color3.fromRGB(36, 40, 50),
 	})
 	corner(statsBar, 10)
-	-- Cover top-rounded corners on stats bar
 	makeFrame(statsBar, {
 		Size             = UDim2.new(1, 0, 0.5, 0),
 		BackgroundColor3 = Color3.fromRGB(36, 40, 50),
 	})
 
-	-- Gray symbol characters (plain text, not emoji) for each stat
-	-- Using simple Unicode that renders as plain text in Roblox's Gotham font
 	local statCells = {
-		{ name = "ATKStat", value = tostring(atk),               symbol = "/" },   -- sword-like slash
-		{ name = "RNGStat", value = tostring(rng),               symbol = "o" },   -- range circle
-		{ name = "SPDStat", value = string.format("%.1f", atkSpd), symbol = "s" }, -- speed
+		{ name = "ATKStat", value = tostring(atk),               symbol = "/" },
+		{ name = "RNGStat", value = tostring(rng),               symbol = "o" },
+		{ name = "SPDStat", value = string.format("%.1f", atkSpd), symbol = "s" },
 	}
 
-	-- We'll use custom small icon frames instead of emoji for cleaner look.
-	-- Icon definitions: simple geometric shapes drawn with frames.
 	local function makeSwordIcon(parent, cx, cy, sz)
-		-- Blade (thin tall rect, rotated)
-		local blade = makeFrame(parent, {
-			Size             = UDim2.new(0, 3, 0, sz),
-			Position         = UDim2.new(0, cx - 1, 0, cy - sz / 2),
-			BackgroundColor3 = Color3.fromRGB(150, 158, 175),
-			Rotation         = 45,
-		})
-		-- Guard (horizontal bar)
-		makeFrame(parent, {
-			Size             = UDim2.new(0, sz * 0.55, 0, 3),
-			Position         = UDim2.new(0, cx - sz * 0.275, 0, cy + sz * 0.08),
-			BackgroundColor3 = Color3.fromRGB(150, 158, 175),
-		})
+		makeFrame(parent, { Size = UDim2.new(0, 3, 0, sz),       Position = UDim2.new(0, cx - 1, 0, cy - sz / 2), BackgroundColor3 = Color3.fromRGB(150, 158, 175), Rotation = 45 })
+		makeFrame(parent, { Size = UDim2.new(0, sz * 0.55, 0, 3), Position = UDim2.new(0, cx - sz * 0.275, 0, cy + sz * 0.08), BackgroundColor3 = Color3.fromRGB(150, 158, 175) })
 	end
 
 	local function makeCircleIcon(parent, cx, cy, r)
-		-- Approximate circle with a square + UICorner
-		local ring = makeFrame(parent, {
-			Size             = UDim2.new(0, r * 2, 0, r * 2),
-			Position         = UDim2.new(0, cx - r, 0, cy - r),
-			BackgroundColor3 = Color3.fromRGB(150, 158, 175),
-		})
+		local ring = makeFrame(parent, { Size = UDim2.new(0, r*2, 0, r*2), Position = UDim2.new(0, cx-r, 0, cy-r), BackgroundColor3 = Color3.fromRGB(150, 158, 175) })
 		corner(ring, r)
-		-- Hollow inner
-		local inner = makeFrame(ring, {
-			Size             = UDim2.new(0, r * 2 - 4, 0, r * 2 - 4),
-			Position         = UDim2.new(0, 2, 0, 2),
-			BackgroundColor3 = Color3.fromRGB(36, 40, 50),
-		})
+		local inner = makeFrame(ring, { Size = UDim2.new(0, r*2-4, 0, r*2-4), Position = UDim2.new(0, 2, 0, 2), BackgroundColor3 = Color3.fromRGB(36, 40, 50) })
 		corner(inner, r - 2)
-		-- Center dot
-		makeFrame(ring, {
-			Size             = UDim2.new(0, 4, 0, 4),
-			Position         = UDim2.new(0, r - 2, 0, r - 2),
-			BackgroundColor3 = Color3.fromRGB(150, 158, 175),
-		})
+		makeFrame(ring, { Size = UDim2.new(0, 4, 0, 4), Position = UDim2.new(0, r-2, 0, r-2), BackgroundColor3 = Color3.fromRGB(150, 158, 175) })
 	end
 
 	local function makeClockIcon(parent, cx, cy, r)
-		-- Clock face (circle outline)
-		local face = makeFrame(parent, {
-			Size             = UDim2.new(0, r * 2, 0, r * 2),
-			Position         = UDim2.new(0, cx - r, 0, cy - r),
-			BackgroundColor3 = Color3.fromRGB(150, 158, 175),
-		})
+		local face = makeFrame(parent, { Size = UDim2.new(0, r*2, 0, r*2), Position = UDim2.new(0, cx-r, 0, cy-r), BackgroundColor3 = Color3.fromRGB(150, 158, 175) })
 		corner(face, r)
-		local inner = makeFrame(face, {
-			Size             = UDim2.new(0, r * 2 - 4, 0, r * 2 - 4),
-			Position         = UDim2.new(0, 2, 0, 2),
-			BackgroundColor3 = Color3.fromRGB(36, 40, 50),
-		})
+		local inner = makeFrame(face, { Size = UDim2.new(0, r*2-4, 0, r*2-4), Position = UDim2.new(0, 2, 0, 2), BackgroundColor3 = Color3.fromRGB(36, 40, 50) })
 		corner(inner, r - 2)
-		-- Hour hand (pointing up-right)
-		makeFrame(face, {
-			Size             = UDim2.new(0, 2, 0, r * 0.55),
-			Position         = UDim2.new(0, r - 1, 0, r - r * 0.55),
-			BackgroundColor3 = Color3.fromRGB(150, 158, 175),
-		})
-		-- Minute hand (pointing right)
-		makeFrame(face, {
-			Size             = UDim2.new(0, r * 0.55, 0, 2),
-			Position         = UDim2.new(0, r, 0, r - 1),
-			BackgroundColor3 = Color3.fromRGB(150, 158, 175),
-		})
+		makeFrame(face, { Size = UDim2.new(0, 2, 0, r*0.55), Position = UDim2.new(0, r-1, 0, r-r*0.55), BackgroundColor3 = Color3.fromRGB(150, 158, 175) })
+		makeFrame(face, { Size = UDim2.new(0, r*0.55, 0, 2), Position = UDim2.new(0, r, 0, r-1),         BackgroundColor3 = Color3.fromRGB(150, 158, 175) })
 	end
 
 	local iconDrawers = { makeSwordIcon, makeCircleIcon, makeClockIcon }
-	local cellW = PANEL_W / 3
-	local iconCY = 23 -- vertical center within stats bar
+	local cellW  = PANEL_W / 3
+	local iconCY = 23
 
 	for i, s in ipairs(statCells) do
 		local cellLeft = (i - 1) * cellW
-
-		-- Value (number) label, left-aligned within cell
-		local valLbl = makeLabel(statsBar, {
+		makeLabel(statsBar, {
 			Name           = s.name,
 			Size           = UDim2.new(0, cellW * 0.5, 1, 0),
 			Position       = UDim2.new(0, cellLeft + 12, 0, 0),
@@ -663,12 +586,7 @@ local function createInfoGui(towerModel: Model)
 			TextSize       = 20,
 			TextXAlignment = Enum.TextXAlignment.Left,
 		})
-
-		-- Icon drawn on the right side of the cell
-		local iconCX = cellLeft + cellW * 0.78
-		iconDrawers[i](statsBar, iconCX, iconCY, 10)
-
-		-- Thin vertical divider between cells (not after last)
+		iconDrawers[i](statsBar, cellLeft + cellW * 0.78, iconCY, 10)
 		if i < 3 then
 			makeFrame(statsBar, {
 				Size             = UDim2.new(0, 1, 0, 28),
@@ -678,16 +596,12 @@ local function createInfoGui(towerModel: Model)
 		end
 	end
 
-	-- ── Strike Skill section ────────────────────────────────────────────────
 	if info.strikeSkill then
-		-- Thin divider above strike skill section
 		makeFrame(panel, {
 			Size             = UDim2.new(1, -16, 0, 1),
 			Position         = UDim2.new(0, 8, 0, 277),
 			BackgroundColor3 = Color3.fromRGB(80, 86, 100),
 		})
-
-		-- Section header
 		makeLabel(panel, {
 			Size           = UDim2.new(1, -16, 0, 16),
 			Position       = UDim2.new(0, 8, 0, 281),
@@ -697,8 +611,6 @@ local function createInfoGui(towerModel: Model)
 			TextSize       = 12,
 			TextXAlignment = Enum.TextXAlignment.Left,
 		})
-
-		-- Skill name badge
 		local nameBadge = makeFrame(panel, {
 			Size             = UDim2.new(0, 180, 0, 22),
 			Position         = UDim2.new(0, 8, 0, 298),
@@ -714,8 +626,6 @@ local function createInfoGui(towerModel: Model)
 			TextSize       = 12,
 			TextXAlignment = Enum.TextXAlignment.Left,
 		})
-
-		-- Skill description
 		makeLabel(panel, {
 			Size           = UDim2.new(1, -200, 0, 44),
 			Position       = UDim2.new(0, 196, 0, 278),
@@ -763,9 +673,9 @@ end
 
 local function createTowerHPBar(m: Model): BillboardGui
 	local root = m.PrimaryPart; if not root then return nil end
-	local hp = m:GetAttribute("HP") or 0
+	local hp   = m:GetAttribute("HP")    or 0
 	local maxHp = m:GetAttribute("MaxHP") or 1
-	local a = getTowerCenterAttachment(m); if not a then return nil end
+	local a    = getTowerCenterAttachment(m); if not a then return nil end
 	updateTowerAttachment(m)
 
 	local bb = Instance.new("BillboardGui")
@@ -822,7 +732,6 @@ towersFolder.ChildRemoved:Connect(function(c)
 	if selectedTowerModel == c then deselectTower() end
 end)
 
--- Cleanup orphans
 for _, c in ipairs(Workspace:GetChildren()) do
 	if c.Name == "PlacementGhostFolder" and c:IsA("Folder") then c:Destroy() end
 end
@@ -832,14 +741,13 @@ end
 -- ============================================================
 
 RunService.RenderStepped:Connect(function(dt)
-	-- HP bars
 	for model, gui in pairs(towerHpGuis) do
 		if model and model.Parent then
 			updateTowerAttachment(model)
-			local hp = model:GetAttribute("HP") or 0
+			local hp    = model:GetAttribute("HP")    or 0
 			local maxHp = model:GetAttribute("MaxHP") or 1
 			local ratio = math.clamp(hp/maxHp, 0, 1)
-			local cont = gui:FindFirstChild("Container")
+			local cont  = gui:FindFirstChild("Container")
 			if not cont then continue end
 			local outline = cont:FindFirstChild("Outline")
 			if not outline then continue end
@@ -863,23 +771,18 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 	end
 
-	-- Info GUI live updates
 	if selectedTowerModel and selectedTowerModel.Parent and infoGui then
 		showTowerRange(selectedTowerModel)
-
 		local panel = infoGui:FindFirstChild("Panel")
 		if panel then
-			-- Update ATK stat value in the bottom bar
 			local atkStat = panel:FindFirstChild("ATKStat", true)
 			if atkStat then
 				local newAtk = tostring(selectedTowerModel:GetAttribute("ATK") or 0)
 				if atkStat.Text ~= newAtk then atkStat.Text = newAtk end
 			end
-
-			-- Update DMG label in the portrait box
 			local dmgLabel = panel:FindFirstChild("DMGLabel", true)
 			if dmgLabel then
-				local newAtk = tostring(selectedTowerModel:GetAttribute("ATK") or 0)
+				local newAtk   = tostring(selectedTowerModel:GetAttribute("ATK") or 0)
 				local expected = "DMG: " .. newAtk
 				if dmgLabel.Text ~= expected then dmgLabel.Text = expected end
 			end
@@ -894,10 +797,13 @@ end)
 -- ============================================================
 
 local function stopStrikeAiming()
-	if strikeGhost and strikeGhost.Parent then strikeGhost:Destroy() end
-	strikeGhost      = nil
-	strikeAiming     = false
-	strikeTowerModel = nil
+	if strikeGhost       and strikeGhost.Parent       then strikeGhost:Destroy()       end
+	if strikeRangeCircle and strikeRangeCircle.Parent then strikeRangeCircle:Destroy() end
+	strikeGhost        = nil
+	strikeRangeCircle  = nil
+	strikeAiming       = false
+	strikeTowerModel   = nil
+	strikeCanPlace     = false
 	if updateConnection then updateConnection:Disconnect(); updateConnection = nil end
 end
 
@@ -907,40 +813,72 @@ local function startStrikeAiming(towerModel: Model)
 	strikeAiming     = true
 	strikeTowerModel = towerModel
 
-	local g = Instance.new("Part")
-	g.Name         = "DynamiteGhost"
-	g.Shape        = Enum.PartType.Cylinder
-	g.Size         = Vector3.new(0.5, 1.0, 1.0)
-	g.Color        = Color3.fromRGB(255, 140, 20)
-	g.Transparency = 0.3
-	g.Material     = Enum.Material.Neon
-	g.Anchored     = true
-	g.CanCollide   = false
-	g.CFrame       = CFrame.new(0, -1000, 0)
-	g.Parent       = Workspace
-	strikeGhost    = g
+	-- Resolve range: half the tower's RNG attribute
+	local towerRng  = towerModel:GetAttribute("RNG") or TOWER_RANGE_STUDS.Deadeye or 30
+	dynamiteRange   = towerRng * 0.5
+
+	-- ── Ghost indicator: a small box (no rotation tricks = no camera drift) ──
+	local g          = Instance.new("Part")
+	g.Name           = "DynamiteGhost"
+	g.Shape          = Enum.PartType.Block      -- plain box, no rotation needed
+	g.Size           = Vector3.new(1.2, 0.6, 0.6)
+	g.Color          = Color3.fromRGB(255, 140, 20)
+	g.Transparency   = 0.35
+	g.Material       = Enum.Material.Neon
+	g.Anchored       = true
+	g.CanCollide     = false
+	g.CastShadow     = false
+	g.CFrame         = CFrame.new(0, -1000, 0)
+	g.Parent         = Workspace
+	strikeGhost      = g
+
+	-- ── Range indicator: flat cylinder lying on the ground ──
+	local rc         = Instance.new("Part")
+	rc.Name          = "DynamiteRangeCircle"
+	rc.Shape         = Enum.PartType.Cylinder
+	rc.Size          = Vector3.new(0.12, dynamiteRange * 2, dynamiteRange * 2)
+	rc.Color         = Color3.fromRGB(255, 180, 50)
+	rc.Transparency  = 0.65
+	rc.Material      = Enum.Material.Neon
+	rc.Anchored      = true
+	rc.CanCollide    = false
+	rc.CastShadow    = false
+	rc.CFrame        = CFrame.new(0, -1000, 0)
+	rc.Parent        = Workspace
+	strikeRangeCircle = rc
+
+	-- Position the range circle at the tower immediately
+	if towerModel.PrimaryPart then
+		local tp = towerModel.PrimaryPart.Position
+		strikeRangeCircle.CFrame = CFrame.new(tp.X, tp.Y - 2.4, tp.Z)
+			* CFrame.Angles(0, 0, math.rad(90))
+	end
 
 	updateConnection = RunService.RenderStepped:Connect(function()
 		if not strikeAiming then return end
+		if not strikeTowerModel or not strikeTowerModel.PrimaryPart then return end
+
+		local tPos = strikeTowerModel.PrimaryPart.Position
+
+		-- Keep range circle pinned to the tower (it never moves)
+		strikeRangeCircle.CFrame = CFrame.new(tPos.X, tPos.Y - 2.4, tPos.Z)
+			* CFrame.Angles(0, 0, math.rad(90))
 
 		local groundPos = raycastGround()
-		if not groundPos or not strikeTowerModel or not strikeTowerModel.PrimaryPart then
+		if not groundPos then
 			strikeCanPlace = false
-			if strikeGhost then strikeGhost.Color = Color3.fromRGB(255, 80, 80) end
+			strikeGhost.CFrame = CFrame.new(0, -1000, 0)  -- hide off-screen
 			return
 		end
 
-		local towerPos = strikeTowerModel.PrimaryPart.Position
-		local flatDist = Vector3.new(groundPos.X - towerPos.X, 0, groundPos.Z - towerPos.Z).Magnitude
+		local flatDist = Vector3.new(groundPos.X - tPos.X, 0, groundPos.Z - tPos.Z).Magnitude
+		strikeCanPlace = (flatDist <= dynamiteRange)
 
-		strikeCanPlace = (flatDist <= DYNAMITE_RANGE)
-
-		if strikeGhost then
-			strikeGhost.CFrame = CFrame.new(groundPos.X, groundPos.Y + 0.3, groundPos.Z) * CFrame.Angles(0, 0, math.rad(90))
-			strikeGhost.Color  = strikeCanPlace
-				and Color3.fromRGB(255, 140, 20)
-				or  Color3.fromRGB(255, 60,  60)
-		end
+		-- Place ghost flat on the ground (just Y-lift of 0.3, no cylinder rotation)
+		strikeGhost.CFrame = CFrame.new(groundPos.X, groundPos.Y + 0.3, groundPos.Z)
+		strikeGhost.Color  = strikeCanPlace
+			and Color3.fromRGB(255, 140, 20)
+			or  Color3.fromRGB(255,  60, 60)
 	end)
 end
 
@@ -948,14 +886,13 @@ end
 -- STRIKE SKILL AIMING (Vitalist Nano Blast)
 -- ============================================================
 
-local VITALIST_RANGE   = TOWER_RANGE_STUDS.Vitalist or 20
-local VITALIST_PIERCE_RADIUS = 4.5  -- must match Vitalist.NANO_PIERCE_RADIUS
+local VITALIST_PIERCE_RADIUS = 4.5
 
 local function stopVitalistAiming()
 	if vitalistAimRect and vitalistAimRect.Parent then vitalistAimRect:Destroy() end
-	vitalistAimRect   = nil
-	vitalistAiming    = false
-	vitalistAimTower  = nil
+	vitalistAimRect  = nil
+	vitalistAiming   = false
+	vitalistAimTower = nil
 	if vitalistAimConnection then vitalistAimConnection:Disconnect(); vitalistAimConnection = nil end
 end
 
@@ -967,61 +904,49 @@ local function startVitalistAiming(towerModel: Model)
 	vitalistAiming   = true
 	vitalistAimTower = towerModel
 
-	local rect = Instance.new("Part")
-	rect.Name         = "VitalistAimRect"
-	-- Size is set in RenderStepped using the tower's live RNG attribute
-	rect.Size         = Vector3.new(VITALIST_PIERCE_RADIUS * 2, 0.15, VITALIST_RANGE)
-	rect.Color        = Color3.fromRGB(50, 150, 255)
-	rect.Transparency = 0.45
-	rect.Material     = Enum.Material.Neon
-	rect.Anchored     = true
-	rect.CanCollide   = false
-	rect.CastShadow   = false
-	rect.CFrame       = CFrame.new(0, -1000, 0)
-	rect.Parent       = Workspace
-	vitalistAimRect   = rect
+	local rect         = Instance.new("Part")
+	rect.Name          = "VitalistAimRect"
+	rect.Size          = Vector3.new(VITALIST_PIERCE_RADIUS * 2, 0.15, TOWER_RANGE_STUDS.Vitalist)
+	rect.Color         = Color3.fromRGB(50, 150, 255)
+	rect.Transparency  = 0.45
+	rect.Material      = Enum.Material.Neon
+	rect.Anchored      = true
+	rect.CanCollide    = false
+	rect.CastShadow    = false
+	rect.CFrame        = CFrame.new(0, -1000, 0)
+	rect.Parent        = Workspace
+	vitalistAimRect    = rect
 
 	vitalistAimConnection = RunService.RenderStepped:Connect(function()
 		if not vitalistAiming then return end
 		if not vitalistAimTower or not vitalistAimTower.PrimaryPart then return end
 
-		-- Use 2× the tower's current RNG so the indicator matches the actual blast range
 		local towerRng = vitalistAimTower:GetAttribute("RNG") or TOWER_RANGE_STUDS.Vitalist or 20
 		local aimRange = towerRng * 2
 
-		-- Match indicator colour to the active protocol
 		local protocol = vitalistAimTower:GetAttribute("Protocol") or "ATK"
 		rect.Color = (protocol == "SUPP")
-			and Color3.fromRGB(50, 220, 80)   -- green for SUPP
-			or  Color3.fromRGB(50, 150, 255)  -- blue  for ATK
+			and Color3.fromRGB(50, 220, 80)
+			or  Color3.fromRGB(50, 150, 255)
 
 		local groundPos = raycastGround()
-		local tPos = vitalistAimTower.PrimaryPart.Position
+		local tPos      = vitalistAimTower.PrimaryPart.Position
 
 		local aimDir: Vector3
 		if groundPos then
 			local flat = Vector3.new(groundPos.X - tPos.X, 0, groundPos.Z - tPos.Z)
-			if flat.Magnitude > 0.5 then
-				aimDir = flat.Unit
-			else
-				aimDir = Vector3.new(0, 0, 1)
-			end
+			aimDir = flat.Magnitude > 0.5 and flat.Unit or Vector3.new(0, 0, 1)
 		else
 			aimDir = Vector3.new(0, 0, 1)
 		end
 
-		-- Narrow (width = pierce diameter) at the tower end; length extends outward.
-		-- Size.X = width (perpendicular to aim), Size.Z = length (along aim direction).
-		-- Center is placed at half the range from the tower so the near edge starts
-		-- exactly at the tower's primary part position (no gap).
 		rect.Size = Vector3.new(VITALIST_PIERCE_RADIUS * 2, 0.15, aimRange)
 		local centerPos = Vector3.new(
 			tPos.X + aimDir.X * (aimRange / 2),
 			tPos.Y - 2.3,
 			tPos.Z + aimDir.Z * (aimRange / 2)
 		)
-		local lookAt = centerPos + aimDir
-		rect.CFrame = CFrame.new(centerPos, lookAt)
+		rect.CFrame = CFrame.new(centerPos, centerPos + aimDir)
 	end)
 end
 
@@ -1040,16 +965,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		startPlacing("Warrior")
 
 	elseif input.KeyCode == STRIKE_SKILL_KEY then
-		-- Cancel any active aim mode
-		if strikeAiming then
-			stopStrikeAiming()
-			return
-		end
-		if vitalistAiming then
-			stopVitalistAiming()
-			return
-		end
-		-- Only works when a tower with a strike skill is selected
+		if strikeAiming   then stopStrikeAiming();   return end
+		if vitalistAiming then stopVitalistAiming();  return end
 		if not selectedTowerModel or not selectedTowerModel.Parent then return end
 		local towerType = selectedTowerModel:GetAttribute("TowerType")
 		local panelData = TOWER_PANEL_DATA[towerType]
@@ -1057,7 +974,6 @@ UserInputService.InputBegan:Connect(function(input, processed)
 
 		if towerType == "Deadeye" then
 			startStrikeAiming(selectedTowerModel)
-
 		elseif towerType == "Vitalist" then
 			startVitalistAiming(selectedTowerModel)
 		end
@@ -1065,11 +981,10 @@ UserInputService.InputBegan:Connect(function(input, processed)
 end)
 
 mouse.Button1Down:Connect(function()
-	-- Vitalist Nano Blast aim confirmation
 	if vitalistAiming then
 		local groundPos = raycastGround()
 		if groundPos and vitalistAimTower and vitalistAimTower.PrimaryPart then
-			local tPos = vitalistAimTower.PrimaryPart.Position
+			local tPos   = vitalistAimTower.PrimaryPart.Position
 			local flatDir = Vector3.new(groundPos.X - tPos.X, 0, groundPos.Z - tPos.Z)
 			if flatDir.Magnitude > 0.5 then
 				strikeSkillRemote:FireServer(vitalistAimTower, "NanoBlast", flatDir.Unit)
@@ -1079,7 +994,6 @@ mouse.Button1Down:Connect(function()
 		return
 	end
 
-	-- Dynamite placement confirmation
 	if strikeAiming then
 		if strikeCanPlace then
 			local groundPos = raycastGround()
@@ -1100,6 +1014,7 @@ mouse.Button1Down:Connect(function()
 		end
 		return
 	end
+
 	local target = mouse.Target
 	local tm = getTowerFromPart(target)
 	if tm then selectTower(tm) else deselectTower() end
@@ -1107,8 +1022,8 @@ end)
 
 mouse.Button2Down:Connect(function()
 	if vitalistAiming then stopVitalistAiming(); return end
-	if strikeAiming then stopStrikeAiming(); return end
-	if placing then stopPlacing(); return end
+	if strikeAiming   then stopStrikeAiming();   return end
+	if placing        then stopPlacing();         return end
 	if selectedTowerModel and selectedTowerModel.Parent then
 		local state = selectedTowerModel:GetAttribute("State") or "Idle"
 		if state == "Moving" or state == "Leaping" then return end

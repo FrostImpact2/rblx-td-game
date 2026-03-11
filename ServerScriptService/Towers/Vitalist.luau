@@ -1042,11 +1042,16 @@ end
 	towersFolder  : used for SUPP retargeting.
 ]]
 function Vitalist.DoAttack(
+	
 	tower: Model,
 	target: Model,
 	enemiesFolder: Folder?,
 	towersFolder: Folder?
 ): boolean
+	
+	if (tower:GetAttribute("Ammo") or 0) <= 0 then return false end
+	
+	
 	local st = getAnimState(tower)
 	if st.reloading or st.bursting then return false end
 	if tick() < st.burstEndTime then return false end
@@ -1151,14 +1156,23 @@ function Vitalist.DoAttack(
 			local newAmmo = math.max((tower:GetAttribute("Ammo") or 0) - Vitalist.AMMO_PER_BURST, 0)
 			tower:SetAttribute("Ammo", newAmmo)
 			Vitalist.UpdateAmmoDisplay(tower)
-			-- Auto-reload when out of ammo
+			-- Auto-reload when out of ammo: play the reload animation properly
 			if newAmmo <= 0 then
-				task.delay(Vitalist.AMMO_RELOAD_TIME, function()
-					if tower and tower.Parent then
-						tower:SetAttribute("Ammo", Vitalist.TOTAL_AMMO)
-						Vitalist.UpdateAmmoDisplay(tower)
-					end
-				end)
+				local reloadSt = getAnimState(tower)
+				if reloadSt and not reloadSt.reloading then
+					triggerReload(tower, reloadSt)
+					-- Wait for reload animation to finish, then restore ammo
+					task.spawn(function()
+						local waitStart = tick()
+						while reloadSt.reloading and (tick() - waitStart) < (Vitalist.AMMO_RELOAD_TIME + 2) do
+							task.wait(0.1)
+						end
+						if tower and tower.Parent then
+							tower:SetAttribute("Ammo", Vitalist.TOTAL_AMMO)
+							Vitalist.UpdateAmmoDisplay(tower)
+						end
+					end)
+				end
 			end
 		end
 
