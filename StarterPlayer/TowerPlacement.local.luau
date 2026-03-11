@@ -30,6 +30,12 @@ local strikeTowerModel: Model? = nil   -- the Deadeye tower for which we're aimi
 local strikeGhost: Part? = nil         -- ghost indicator for Dynamite target
 local strikeCanPlace     = false       -- valid dynamite placement position
 
+-- Strike Skill aiming state (Vitalist Nano Blast)
+local vitalistAiming    = false
+local vitalistAimTower: Model? = nil
+local vitalistAimRect: Part?   = nil
+local vitalistAimConnection: RBXScriptConnection? = nil
+
 local ghostFolder: Folder? = nil
 local ghostParts = {}
 local rangePreview: Part? = nil
@@ -939,6 +945,72 @@ local function startStrikeAiming(towerModel: Model)
 end
 
 -- ============================================================
+-- STRIKE SKILL AIMING (Vitalist Nano Blast)
+-- ============================================================
+
+local VITALIST_RANGE   = TOWER_RANGE_STUDS.Vitalist or 20
+local VITALIST_PIERCE_RADIUS = 4.5  -- must match Vitalist.NANO_PIERCE_RADIUS
+
+local function stopVitalistAiming()
+	if vitalistAimRect and vitalistAimRect.Parent then vitalistAimRect:Destroy() end
+	vitalistAimRect   = nil
+	vitalistAiming    = false
+	vitalistAimTower  = nil
+	if vitalistAimConnection then vitalistAimConnection:Disconnect(); vitalistAimConnection = nil end
+end
+
+local function startVitalistAiming(towerModel: Model)
+	if placing then stopPlacing() end
+	stopStrikeAiming()
+	stopVitalistAiming()
+
+	vitalistAiming   = true
+	vitalistAimTower = towerModel
+
+	local rect = Instance.new("Part")
+	rect.Name         = "VitalistAimRect"
+	rect.Size         = Vector3.new(VITALIST_RANGE, 0.15, VITALIST_PIERCE_RADIUS * 2)
+	rect.Color        = Color3.fromRGB(50, 150, 255)
+	rect.Transparency = 0.45
+	rect.Material     = Enum.Material.Neon
+	rect.Anchored     = true
+	rect.CanCollide   = false
+	rect.CastShadow   = false
+	rect.CFrame       = CFrame.new(0, -1000, 0)
+	rect.Parent       = Workspace
+	vitalistAimRect   = rect
+
+	vitalistAimConnection = RunService.RenderStepped:Connect(function()
+		if not vitalistAiming then return end
+		if not vitalistAimTower or not vitalistAimTower.PrimaryPart then return end
+
+		local groundPos = raycastGround()
+		local tPos = vitalistAimTower.PrimaryPart.Position
+
+		local aimDir: Vector3
+		if groundPos then
+			local flat = Vector3.new(groundPos.X - tPos.X, 0, groundPos.Z - tPos.Z)
+			if flat.Magnitude > 0.5 then
+				aimDir = flat.Unit
+			else
+				aimDir = Vector3.new(0, 0, 1)
+			end
+		else
+			aimDir = Vector3.new(0, 0, 1)
+		end
+
+		-- Position rectangle centered halfway along the range, flat on the ground
+		local centerPos = Vector3.new(
+			tPos.X + aimDir.X * (VITALIST_RANGE / 2),
+			tPos.Y - 2.3,
+			tPos.Z + aimDir.Z * (VITALIST_RANGE / 2)
+		)
+		local lookAt = centerPos + aimDir
+		rect.CFrame = CFrame.new(centerPos, lookAt)
+	end)
+end
+
+-- ============================================================
 -- INPUT
 -- ============================================================
 
@@ -953,9 +1025,13 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		startPlacing("Warrior")
 
 	elseif input.KeyCode == STRIKE_SKILL_KEY then
-		-- Cancel strike aiming if already active
+		-- Cancel any active aim mode
 		if strikeAiming then
 			stopStrikeAiming()
+			return
+		end
+		if vitalistAiming then
+			stopVitalistAiming()
 			return
 		end
 		-- Only works when a tower with a strike skill is selected
@@ -968,13 +1044,26 @@ UserInputService.InputBegan:Connect(function(input, processed)
 			startStrikeAiming(selectedTowerModel)
 
 		elseif towerType == "Vitalist" then
-			-- Nano Blast: fire immediately
-			strikeSkillRemote:FireServer(selectedTowerModel, "NanoBlast", nil)
+			startVitalistAiming(selectedTowerModel)
 		end
 	end
 end)
 
 mouse.Button1Down:Connect(function()
+	-- Vitalist Nano Blast aim confirmation
+	if vitalistAiming then
+		local groundPos = raycastGround()
+		if groundPos and vitalistAimTower and vitalistAimTower.PrimaryPart then
+			local tPos = vitalistAimTower.PrimaryPart.Position
+			local flatDir = Vector3.new(groundPos.X - tPos.X, 0, groundPos.Z - tPos.Z)
+			if flatDir.Magnitude > 0.5 then
+				strikeSkillRemote:FireServer(vitalistAimTower, "NanoBlast", flatDir.Unit)
+			end
+		end
+		stopVitalistAiming()
+		return
+	end
+
 	-- Dynamite placement confirmation
 	if strikeAiming then
 		if strikeCanPlace then
@@ -1002,6 +1091,7 @@ mouse.Button1Down:Connect(function()
 end)
 
 mouse.Button2Down:Connect(function()
+	if vitalistAiming then stopVitalistAiming(); return end
 	if strikeAiming then stopStrikeAiming(); return end
 	if placing then stopPlacing(); return end
 	if selectedTowerModel and selectedTowerModel.Parent then

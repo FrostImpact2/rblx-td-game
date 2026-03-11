@@ -65,6 +65,10 @@ Vitalist.GUN_LOWER_DELAY        = 3.0    -- seconds without a shot → lower gun
 Vitalist.BURST_SHOT_INTERVAL    = 0.065  -- seconds between individual burst shots
 Vitalist.NANO_PIERCE_RADIUS     = 4.5    -- studs off-axis; enemies within this are pierced
 Vitalist.NANO_BLAST_COOLDOWN    = 12     -- seconds between Nano Blast uses
+Vitalist.MAX_CHARGE             = 40     -- charge required to use Nano Blast
+Vitalist.TOTAL_AMMO             = 40     -- total ammo before reload
+Vitalist.AMMO_PER_BURST         = 8      -- ammo consumed per basic attack burst
+Vitalist.AMMO_RELOAD_TIME       = 8      -- seconds to auto-reload when ammo hits 0
 
 -- ====== ANIMATION IDs ======
 local IDLE_ANIM_ID            = "rbxassetid://98169705964556"
@@ -239,6 +243,112 @@ end
 function Vitalist.IsNanoBlastReady(tower: Model): boolean
 	local lastFire = nanoblastLastFire[tower] or -math.huge
 	return (tick() - lastFire) >= Vitalist.NANO_BLAST_COOLDOWN
+end
+
+-- ============================================================
+-- CHARGE & AMMO DISPLAY
+-- ============================================================
+
+-- Updates (or creates) a BillboardGui named "ChargeDisplay" showing the current charge.
+function Vitalist.UpdateChargeDisplay(tower: Model)
+	local charge = tower:GetAttribute("Charge") or 0
+	local head = tower:FindFirstChild("Head") or tower.PrimaryPart
+	if not head or not head:IsA("BasePart") then return end
+
+	local gui = head:FindFirstChild("ChargeDisplay")
+	if not gui then
+		gui = Instance.new("BillboardGui")
+		gui.Name            = "ChargeDisplay"
+		gui.Size            = UDim2.new(0, 100, 0, 28)
+		gui.StudsOffset     = Vector3.new(0, 3.2, 0)
+		gui.AlwaysOnTop     = false
+		gui.LightInfluence  = 0
+		gui.ResetOnSpawn    = false
+		gui.Parent          = head
+
+		local bg = Instance.new("Frame")
+		bg.Name             = "BG"
+		bg.Size             = UDim2.new(1, 0, 0.55, 0)
+		bg.Position         = UDim2.new(0, 0, 0, 0)
+		bg.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+		bg.BorderSizePixel  = 0
+		bg.Parent           = gui
+
+		local fill = Instance.new("Frame")
+		fill.Name             = "Fill"
+		fill.Size             = UDim2.new(0, 0, 1, 0)
+		fill.BackgroundColor3 = Color3.fromRGB(255, 200, 0)
+		fill.BorderSizePixel  = 0
+		fill.Parent           = bg
+
+		local label = Instance.new("TextLabel")
+		label.Name            = "ChargeLabel"
+		label.Size            = UDim2.new(1, 0, 0.45, 0)
+		label.Position        = UDim2.new(0, 0, 0.55, 0)
+		label.BackgroundTransparency = 1
+		label.TextColor3      = Color3.fromRGB(255, 220, 80)
+		label.TextScaled      = true
+		label.Font            = Enum.Font.GothamBold
+		label.Text            = charge.."/"..Vitalist.MAX_CHARGE
+		label.Parent          = gui
+	end
+
+	local fillRatio = math.clamp(charge / Vitalist.MAX_CHARGE, 0, 1)
+	local bg    = gui:FindFirstChild("BG")
+	local label = gui:FindFirstChild("ChargeLabel")
+	if bg then
+		local fill = bg:FindFirstChild("Fill")
+		if fill then
+			fill.Size = UDim2.new(fillRatio, 0, 1, 0)
+			fill.BackgroundColor3 = (charge >= Vitalist.MAX_CHARGE)
+				and Color3.fromRGB(255, 240, 60)
+				or  Color3.fromRGB(255, 200, 0)
+		end
+	end
+	if label then
+		label.Text = charge.."/"..Vitalist.MAX_CHARGE
+	end
+end
+
+-- Creates the ammo BillboardGui above the tower.
+function Vitalist.CreateAmmoDisplay(tower: Model)
+	local head = tower:FindFirstChild("Head") or tower.PrimaryPart
+	if not head or not head:IsA("BasePart") then return end
+	if head:FindFirstChild("AmmoDisplay") then return end
+
+	local ammo = tower:GetAttribute("Ammo") or Vitalist.TOTAL_AMMO
+
+	local gui = Instance.new("BillboardGui")
+	gui.Name            = "AmmoDisplay"
+	gui.Size            = UDim2.new(0, 100, 0, 18)
+	gui.StudsOffset     = Vector3.new(0, 5.0, 0)
+	gui.AlwaysOnTop     = false
+	gui.LightInfluence  = 0
+	gui.ResetOnSpawn    = false
+	gui.Parent          = head
+
+	local label = Instance.new("TextLabel")
+	label.Name            = "AmmoLabel"
+	label.Size            = UDim2.new(1, 0, 1, 0)
+	label.BackgroundTransparency = 1
+	label.TextColor3      = Color3.fromRGB(255, 255, 255)
+	label.TextScaled      = true
+	label.Font            = Enum.Font.GothamBold
+	label.Text            = "♦ "..ammo.."/"..Vitalist.TOTAL_AMMO
+	label.Parent          = gui
+end
+
+-- Updates the ammo BillboardGui text.
+function Vitalist.UpdateAmmoDisplay(tower: Model)
+	local ammo = tower:GetAttribute("Ammo") or Vitalist.TOTAL_AMMO
+	local head = tower:FindFirstChild("Head") or tower.PrimaryPart
+	if not head or not head:IsA("BasePart") then return end
+	local gui = head:FindFirstChild("AmmoDisplay")
+	if not gui then return end
+	local label = gui:FindFirstChild("AmmoLabel")
+	if label then
+		label.Text = "♦ "..ammo.."/"..Vitalist.TOTAL_AMMO
+	end
 end
 
 -- ============================================================
@@ -712,6 +822,8 @@ function Vitalist.CreateModel(position: Vector3, TowerStats: any): Model?
 	model:SetAttribute("Owner",       "")
 	model:SetAttribute("TowerType",   "Vitalist")
 	model:SetAttribute("Protocol",    "ATK")  -- "ATK" or "SUPP"
+	model:SetAttribute("Charge",      0)
+	model:SetAttribute("Ammo",        Vitalist.TOTAL_AMMO)
 
 	model:PivotTo(CFrame.new(position))
 
@@ -823,6 +935,8 @@ end
 function Vitalist.InitTower(tower: Model)
 	local st = getAnimState(tower)
 	playIdle(tower, st)
+	Vitalist.CreateAmmoDisplay(tower)
+	Vitalist.UpdateChargeDisplay(tower)
 end
 
 function Vitalist.IsReadyToFire(tower: Model): boolean
@@ -897,6 +1011,9 @@ function Vitalist.DoAttack(
 	if st.reloading or st.bursting then return false end
 	if tick() < st.burstEndTime then return false end
 
+	-- Ammo check
+	if (tower:GetAttribute("Ammo") or 0) <= 0 then return false end
+
 	local atk      = tower:GetAttribute("ATK")        or 12
 	local multi    = tower:GetAttribute("DamageMulti") or 1.0
 	local protocol = tower:GetAttribute("Protocol")    or "ATK"
@@ -970,6 +1087,13 @@ function Vitalist.DoAttack(
 
 				playShootOnce(tower, st)
 
+				-- Increment charge per bullet
+				if tower and tower.Parent then
+					local newCharge = math.min((tower:GetAttribute("Charge") or 0) + 1, Vitalist.MAX_CHARGE)
+					tower:SetAttribute("Charge", newCharge)
+					Vitalist.UpdateChargeDisplay(tower)
+				end
+
 				st.lastShotTime = tick()
 
 				if i < Vitalist.BULLETS_PER_BURST then
@@ -980,6 +1104,22 @@ function Vitalist.DoAttack(
 
 		if not ok then
 			warn("[Vitalist] Burst loop error:", err)
+		end
+
+		-- Deduct ammo after the burst completes
+		if tower and tower.Parent then
+			local newAmmo = math.max((tower:GetAttribute("Ammo") or 0) - Vitalist.AMMO_PER_BURST, 0)
+			tower:SetAttribute("Ammo", newAmmo)
+			Vitalist.UpdateAmmoDisplay(tower)
+			-- Auto-reload when out of ammo
+			if newAmmo <= 0 then
+				task.delay(Vitalist.AMMO_RELOAD_TIME, function()
+					if tower and tower.Parent then
+						tower:SetAttribute("Ammo", Vitalist.TOTAL_AMMO)
+						Vitalist.UpdateAmmoDisplay(tower)
+					end
+				end)
+			end
 		end
 
 		local burstDuration = Vitalist.BULLETS_PER_BURST * Vitalist.BURST_SHOT_INTERVAL
@@ -997,12 +1137,15 @@ end
 
 --[[
 	Player-triggered strike skill.  Does NOT fire automatically.
-	ATK  : blue laser to the targeted enemy (2× AP damage, pierces).
-	SUPP : green laser to the nearest ally tower (2× AP healing).
+	direction : Unit vector (flat, Y=0) from the player's aim. Used in ATK mode.
+	ATK  : blue laser fired along 'direction' from the barrel, piercing all
+	       enemies within NANO_PIERCE_RADIUS of the ray.
+	SUPP : green laser to the nearest ally tower (2× AP healing). Direction ignored.
 	Cooldown: Vitalist.NANO_BLAST_COOLDOWN seconds.
 ]]
 function Vitalist.FireNanoBlast(
 	tower: Model,
+	direction: Vector3,
 	enemiesFolder: Folder?,
 	towersFolder: Folder?
 ): boolean
@@ -1019,23 +1162,28 @@ function Vitalist.FireNanoBlast(
 
 	local beamColor = (protocol == "SUPP") and SUPP_COLOR or ATK_COLOR
 	local blastDmg  = ap * multi * 2
-	local blastRange = (tower:GetAttribute("RNG") or 20) * 2
+	local blastRange = tower:GetAttribute("RNG") or 20
 
 	-- Record use time
 	nanoblastLastFire[tower] = tick()
 
-	-- Find best target
+	-- Reset charge immediately on fire
+	tower:SetAttribute("Charge", 0)
+	Vitalist.UpdateChargeDisplay(tower)
+
+	-- For SUPP mode, find the best ally target
 	local blastTarget: Model? = nil
 
 	if protocol == "SUPP" and towersFolder then
 		local pos = torso and torso.Position or Vector3.zero
+		local suppRange = blastRange * 2  -- SUPP heals at 2× ATK range (wider support radius)
 		local bestHPRatio = math.huge
 		for _, t in ipairs(towersFolder:GetChildren()) do
 			if t:IsA("Model") and t ~= tower and t.PrimaryPart then
 				local hp    = t:GetAttribute("HP")    or 0
 				local maxHP = t:GetAttribute("MaxHP") or 1
 				local d     = (t.PrimaryPart.Position - pos).Magnitude
-				if d <= blastRange and hp > 0 and hp < maxHP then
+				if d <= suppRange and hp > 0 and hp < maxHP then
 					local ratio = hp / maxHP
 					if ratio < bestHPRatio then
 						bestHPRatio = ratio
@@ -1045,40 +1193,29 @@ function Vitalist.FireNanoBlast(
 			end
 		end
 
-	elseif protocol == "ATK" and enemiesFolder then
-		local pos = torso and torso.Position or Vector3.zero
-		local bestWP   = -math.huge
-		local bestDist = math.huge
-		for _, e in ipairs(enemiesFolder:GetChildren()) do
-			if e:IsA("Model") and e.PrimaryPart and (e:GetAttribute("HP") or 0) > 0 then
-				local d = (e.PrimaryPart.Position - pos).Magnitude
-				if d <= blastRange then
-					local wp = e:GetAttribute("WaypointIndex") or 0
-					if wp > bestWP or (wp == bestWP and d < bestDist) then
-						bestWP    = wp
-						bestDist  = d
-						blastTarget = e
-					end
-				end
-			end
+		if not blastTarget or not blastTarget.Parent or not blastTarget.PrimaryPart then
+			-- No valid SUPP target — do not consume the cooldown
+			nanoblastLastFire[tower] = nil
+			tower:SetAttribute("Charge", Vitalist.MAX_CHARGE)
+			Vitalist.UpdateChargeDisplay(tower)
+			return false
 		end
 	end
 
-	if not blastTarget or not blastTarget.Parent or not blastTarget.PrimaryPart then
-		-- No valid target — do not consume the cooldown
-		nanoblastLastFire[tower] = nil
-		return false
-	end
-
-	-- Face the target
-	if torso and blastTarget.PrimaryPart then
-		local flatDir = Vector3.new(
-			blastTarget.PrimaryPart.Position.X - torso.Position.X,
-			0,
-			blastTarget.PrimaryPart.Position.Z - torso.Position.Z
-		)
-		if flatDir.Magnitude > 0.1 then
-			torso.CFrame = CFrame.new(torso.Position, torso.Position + flatDir.Unit)
+	-- Face the aim direction (ATK) or target (SUPP)
+	if torso then
+		local faceDir: Vector3? = nil
+		if protocol == "ATK" and direction and direction.Magnitude > 0.1 then
+			faceDir = Vector3.new(direction.X, 0, direction.Z)
+		elseif protocol == "SUPP" and blastTarget and blastTarget.PrimaryPart then
+			faceDir = Vector3.new(
+				blastTarget.PrimaryPart.Position.X - torso.Position.X,
+				0,
+				blastTarget.PrimaryPart.Position.Z - torso.Position.Z
+			)
+		end
+		if faceDir and faceDir.Magnitude > 0.1 then
+			torso.CFrame = CFrame.new(torso.Position, torso.Position + faceDir.Unit)
 		end
 	end
 
@@ -1100,9 +1237,12 @@ function Vitalist.FireNanoBlast(
 		local fromPos = getBarrelPos(tower)
 
 		if protocol == "ATK" and enemiesFolder then
-			local aimDir  = (blastTarget.PrimaryPart.Position - fromPos)
+			-- Use the player-aimed direction
+			local aimDir  = direction and Vector3.new(direction.X, 0, direction.Z) or Vector3.new(0, 0, 1)
+			if aimDir.Magnitude < 0.1 then aimDir = Vector3.new(0, 0, 1) end
+			aimDir = aimDir.Unit
 			local pierced = getEnemiesAlongRay(fromPos, aimDir, blastRange, Vitalist.NANO_PIERCE_RADIUS, enemiesFolder)
-			local beamEnd = fromPos + aimDir.Unit * blastRange
+			local beamEnd = fromPos + aimDir * blastRange
 
 			Vitalist.SpawnMuzzleFlash(fromPos, beamColor, true)
 			Vitalist.SpawnHitscanBeam(fromPos, beamEnd, beamColor, true)
@@ -1125,7 +1265,7 @@ function Vitalist.FireNanoBlast(
 
 		else
 			-- SUPP: single-target heal
-			if blastTarget.Parent and blastTarget.PrimaryPart then
+			if blastTarget and blastTarget.Parent and blastTarget.PrimaryPart then
 				local impactPos = blastTarget.PrimaryPart.Position
 				local hp        = blastTarget:GetAttribute("HP")    or 0
 				local maxHP     = blastTarget:GetAttribute("MaxHP") or 1
