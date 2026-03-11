@@ -920,6 +920,9 @@ end)
 -- STRIKE SKILL REMOTE
 -- ============================================================
 
+local DYNAMITE_RANGE_TOLERANCE = 0.5   -- studs of extra leeway for server-side range check
+local DYNAMITE_GROUND_OFFSET   = -2.3  -- Y offset from torso to place dynamite on the ground
+
 strikeSkillRemote.OnServerEvent:Connect(function(player: Player, tower: Model, skillName: string, position)
 	if type(skillName) ~= "string"           then return end
 	if not tower or not tower:IsA("Model")   then return end
@@ -933,9 +936,9 @@ strikeSkillRemote.OnServerEvent:Connect(function(player: Player, tower: Model, s
 		local torso = tower.PrimaryPart
 		if not torso then return end
 		local flatDist = Vector3.new(position.X - torso.Position.X, 0, position.Z - torso.Position.Z).Magnitude
-		if flatDist > Deadeye.DYNAMITE_RANGE + 0.5 then return end  -- small tolerance
-		-- Snap to ground level
-		local snapPos = Vector3.new(position.X, torso.Position.Y - 2.3, position.Z)
+		if flatDist > Deadeye.DYNAMITE_RANGE + DYNAMITE_RANGE_TOLERANCE then return end
+		-- Snap dynamite Y to ground level near the tower base
+		local snapPos = Vector3.new(position.X, torso.Position.Y + DYNAMITE_GROUND_OFFSET, position.Z)
 		Deadeye.PlaceDynamite(tower, snapPos)
 
 	elseif skillName == "NanoBlast" and towerType == "Vitalist" then

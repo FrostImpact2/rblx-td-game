@@ -1065,8 +1065,9 @@ function Vitalist.FireNanoBlast(
 	end
 
 	if not blastTarget or not blastTarget.Parent or not blastTarget.PrimaryPart then
-		-- No valid target – still consume cooldown since it was intentional
-		return true
+		-- No valid target — do not consume the cooldown
+		nanoblastLastFire[tower] = nil
+		return false
 	end
 
 	-- Face the target

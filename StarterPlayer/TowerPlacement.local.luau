@@ -270,7 +270,7 @@ local TOWER_PANEL_DATA = {
 		maxLevel     = 3,
 		strikeSkill  = {
 			name    = "DYNAMITE  [Q]",
-			desc    = "Place within 8 RNG. Deadeye auto-targets it with Headhunter. Explodes for 0.6× ATK AoE + 0.2× AP/s fire (3s).",
+			desc    = "Place within 8 studs. Deadeye auto-targets it with Headhunter. Explodes for 0.6× ATK AoE + 0.2× AP/s fire (3s).",
 			skillId = "Dynamite",
 		},
 	},
