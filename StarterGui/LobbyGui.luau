@@ -7,14 +7,15 @@ Implements all three main out-of-round GUIs:
   • QUESTS     – daily / weekly / challenge quest tabs
   • GACHA      – standard and special banner pull system
 
-Sleek bottom-panel design with slanted tabs, smooth slide-up
-animation, and camera manipulation. An arrow button at the
-bottom of the screen toggles the panel open/closed.
+Floating 3D-perspective panel design with a segmented top bar,
+grid-based tile layout, and camera manipulation.  An arrow
+button at the bottom of the screen toggles the panel open/closed.
 ]]
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService      = game:GetService("TweenService")
+local Workspace         = game:GetService("Workspace")
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -39,7 +40,7 @@ local gameStateValue       = ReplicatedStorage:WaitForChild("GameState",        
 local localCoins      = 0
 local localGems       = 0
 local activeBanner    = "standard"
-local activePanel     = nil   -- "inventory" | "quests" | "gacha" | nil
+local activePanel     = nil   -- "home" | "inventory" | "quests" | "gacha" | nil
 
 local unlockedTowers  = { Warrior = true }
 local ownedEquipment  = {}
@@ -48,7 +49,7 @@ local activeQuestTab  = "Daily"
 local panelOpen       = false
 
 -- ============================================================
--- COLOUR PALETTE  (sleek light-theme with accents)
+-- COLOUR PALETTE  (flat light-theme matching reference image)
 -- ============================================================
 
 local C = {
@@ -68,13 +69,18 @@ local C = {
 	WHITE     = Color3.fromRGB(255, 255, 255),
 	BLACK     = Color3.fromRGB(0,   0,   0),
 	TAB_BG    = Color3.fromRGB(42,  44,  58),
-	}
+	PINK_L    = Color3.fromRGB(255, 180, 180),
+	PINK_R    = Color3.fromRGB(255, 120, 130),
+	TILE_BG   = Color3.fromRGB(245, 246, 252),
+}
 
-local TAB_SLANT_DEGREES = -4
+-- Perspective rotation applied to the whole panel for a 3D floating feel
+local PANEL_ROTATION = -2
 
--- Camera cinematic angle offsets
-local CAMERA_OFFSET        = Vector3.new(8, 5, 8)
-local CAMERA_LOOKAT_OFFSET = Vector3.new(0, 1, 0)
+-- Camera cinematic angle offsets – positioned to the side so the
+-- character is visible next to the tilted GUI panel.
+local CAMERA_OFFSET        = Vector3.new(6, 4, 10)
+local CAMERA_LOOKAT_OFFSET = Vector3.new(0, 2, 0)
 
 -- ============================================================
 -- ROOT SCREEN GUI
@@ -164,57 +170,82 @@ local function rarityStars(rarityKey: string): string
 end
 
 -- ============================================================
--- MAIN BOTTOM PANEL  (slides up from the bottom of the screen)
+-- MAIN FLOATING PANEL  (centred with perspective rotation)
 -- ============================================================
 
-local PANEL_HEIGHT = 0.55
+local PANEL_W = 0.88          -- fraction of screen width
+local PANEL_H = 0.72          -- fraction of screen height
 
 local mainPanel              = Instance.new("Frame")
 mainPanel.Name               = "MainPanel"
-mainPanel.Size               = UDim2.new(1, 0, PANEL_HEIGHT, 0)
-mainPanel.Position           = UDim2.new(0, 0, 1, 0)
-mainPanel.BackgroundColor3   = C.PANEL
-mainPanel.BackgroundTransparency = 0
+mainPanel.Size               = UDim2.new(PANEL_W, 0, PANEL_H, 0)
+mainPanel.AnchorPoint        = Vector2.new(0.5, 0.5)
+mainPanel.Position           = UDim2.new(0.5, 0, 1.5, 0)   -- starts off-screen below
+mainPanel.BackgroundColor3   = C.BG
+mainPanel.BackgroundTransparency = 0.02
 mainPanel.BorderSizePixel    = 0
 mainPanel.ClipsDescendants   = true
+mainPanel.Rotation           = PANEL_ROTATION
 mainPanel.ZIndex             = 5
 mainPanel.Parent             = screenGui
+makeCorner(mainPanel, 8)
+makeStroke(mainPanel, C.BORDER, 1, 0.25)
 
-local accentStripe           = Instance.new("Frame")
-accentStripe.Size            = UDim2.new(1, 0, 0, 3)
-accentStripe.Position        = UDim2.new(0, 0, 0, 0)
-accentStripe.BackgroundColor3 = C.ACCENT
-accentStripe.BorderSizePixel = 0
-accentStripe.ZIndex          = 20
-accentStripe.Parent          = mainPanel
+-- Subtle depth gradient (left brighter → right slightly darker)
+local depthGrad              = Instance.new("UIGradient")
+depthGrad.Color              = ColorSequence.new(
+	Color3.fromRGB(255, 255, 255),
+	Color3.fromRGB(235, 235, 240)
+)
+depthGrad.Rotation           = 0
+depthGrad.Parent             = mainPanel
 
 -- ============================================================
--- TAB BAR  (dark header with slanted tab buttons)
+-- TAB BAR  (wide dark header with segmented tabs + status area)
 -- ============================================================
 
-local TAB_BAR_HEIGHT = 46
+local TAB_BAR_HEIGHT = 44
 
 local tabBar              = Instance.new("Frame")
 tabBar.Name               = "TabBar"
 tabBar.Size               = UDim2.new(1, 0, 0, TAB_BAR_HEIGHT)
-tabBar.Position           = UDim2.new(0, 0, 0, 3)
+tabBar.Position           = UDim2.new(0, 0, 0, 0)
 tabBar.BackgroundColor3   = C.TAB_BG
 tabBar.BorderSizePixel    = 0
 tabBar.ClipsDescendants   = true
 tabBar.ZIndex             = 10
 tabBar.Parent             = mainPanel
 
+-- ── Status / currency area (right side of tab bar) ──────────
 local currencyArea        = Instance.new("Frame")
-currencyArea.Size         = UDim2.new(0, 280, 0, 32)
-currencyArea.Position     = UDim2.new(1, -290, 0.5, -16)
+currencyArea.Size         = UDim2.new(0, 340, 0, 32)
+currencyArea.Position     = UDim2.new(1, -350, 0.5, -16)
 currencyArea.BackgroundTransparency = 1
 currencyArea.BorderSizePixel = 0
 currencyArea.ZIndex       = 12
 currencyArea.Parent       = tabBar
 
+-- Level indicator
+local lvlFrame            = Instance.new("Frame")
+lvlFrame.Size             = UDim2.new(0, 50, 0, 28)
+lvlFrame.Position         = UDim2.new(0, 0, 0.5, -14)
+lvlFrame.BackgroundColor3 = Color3.fromRGB(60, 62, 78)
+lvlFrame.BorderSizePixel  = 0
+lvlFrame.ZIndex           = 13
+lvlFrame.Parent           = currencyArea
+makeCorner(lvlFrame, 4)
+
+local lvlLabel = makeLabel(lvlFrame, "Lv 1",
+	UDim2.new(1, 0, 1, 0), UDim2.new(0, 0, 0, 0),
+	C.WHITE, nil, 1)
+lvlLabel.TextSize = 11
+lvlLabel.TextXAlignment = Enum.TextXAlignment.Center
+lvlLabel.ZIndex = 14
+
+-- Coins
 local coinsFrame          = Instance.new("Frame")
-coinsFrame.Size           = UDim2.new(0, 120, 0, 28)
-coinsFrame.Position       = UDim2.new(0, 0, 0.5, -14)
+coinsFrame.Size           = UDim2.new(0, 100, 0, 28)
+coinsFrame.Position       = UDim2.new(0, 58, 0.5, -14)
 coinsFrame.BackgroundColor3 = Color3.fromRGB(60, 62, 78)
 coinsFrame.BorderSizePixel = 0
 coinsFrame.ZIndex         = 13
@@ -222,22 +253,23 @@ coinsFrame.Parent         = currencyArea
 makeCorner(coinsFrame, 4)
 
 local coinsIcon = makeLabel(coinsFrame, "🪙",
-	UDim2.new(0, 24, 1, 0), UDim2.new(0, 4, 0, 0),
+	UDim2.new(0, 22, 1, 0), UDim2.new(0, 4, 0, 0),
 	C.GOLD, nil, 1)
-coinsIcon.TextSize = 14
+coinsIcon.TextSize = 13
 coinsIcon.TextXAlignment = Enum.TextXAlignment.Center
 coinsIcon.ZIndex = 14
 
 local coinsLabel = makeLabel(coinsFrame, "1,000",
-	UDim2.new(1, -30, 1, 0), UDim2.new(0, 28, 0, 0),
+	UDim2.new(1, -28, 1, 0), UDim2.new(0, 26, 0, 0),
 	C.GOLD, nil, 1)
-coinsLabel.TextSize = 13
+coinsLabel.TextSize = 12
 coinsLabel.Font = Enum.Font.GothamBold
 coinsLabel.ZIndex = 14
 
+-- Gems
 local gemsFrame           = Instance.new("Frame")
-gemsFrame.Size            = UDim2.new(0, 100, 0, 28)
-gemsFrame.Position        = UDim2.new(0, 130, 0.5, -14)
+gemsFrame.Size            = UDim2.new(0, 80, 0, 28)
+gemsFrame.Position        = UDim2.new(0, 166, 0.5, -14)
 gemsFrame.BackgroundColor3 = Color3.fromRGB(60, 62, 78)
 gemsFrame.BorderSizePixel = 0
 gemsFrame.ZIndex          = 13
@@ -245,64 +277,54 @@ gemsFrame.Parent          = currencyArea
 makeCorner(gemsFrame, 4)
 
 local gemsIcon = makeLabel(gemsFrame, "💎",
-	UDim2.new(0, 24, 1, 0), UDim2.new(0, 4, 0, 0),
+	UDim2.new(0, 22, 1, 0), UDim2.new(0, 4, 0, 0),
 	C.GEM, nil, 1)
-gemsIcon.TextSize = 14
+gemsIcon.TextSize = 13
 gemsIcon.TextXAlignment = Enum.TextXAlignment.Center
 gemsIcon.ZIndex = 14
 
 local gemsLabel = makeLabel(gemsFrame, "50",
-	UDim2.new(1, -30, 1, 0), UDim2.new(0, 28, 0, 0),
+	UDim2.new(1, -28, 1, 0), UDim2.new(0, 26, 0, 0),
 	C.GEM, nil, 1)
-gemsLabel.TextSize = 13
+gemsLabel.TextSize = 12
 gemsLabel.Font = Enum.Font.GothamBold
 gemsLabel.ZIndex = 14
 
+-- Start / Stop button
 local toggleBtn = makeButton(tabBar, "▶ START",
-	UDim2.new(0, 90, 0, 28),
-	UDim2.new(1, -390, 0.5, -14),
+	UDim2.new(0, 84, 0, 28),
+	UDim2.new(1, -94, 0.5, -14),
 	C.GREEN, C.WHITE)
 makeCorner(toggleBtn, 4)
 toggleBtn.TextSize = 11
 toggleBtn.ZIndex = 13
 
 -- ============================================================
--- SLANTED TAB BUTTONS
+-- SEGMENTED TAB BUTTONS  (flat rectangular segments with thin dividers)
 -- ============================================================
 
 local tabButtons = {}
 
 local TAB_DEFS = {
-	{ key = "inventory", label = "INVENTORY", icon = "🎒", order = 1 },
-	{ key = "quests",    label = "QUESTS",    icon = "📜", order = 2 },
-	{ key = "gacha",     label = "GACHA",     icon = "⭐",    order = 3 },
-	}
+	{ key = "inventory", label = "INVENTORY", order = 1 },
+	{ key = "quests",    label = "QUESTS",    order = 2 },
+	{ key = "gacha",     label = "GACHA",     order = 3 },
+}
 
-local TAB_WIDTH = 140
-local TAB_GAP   = 4
+local TAB_WIDTH = 130
+local TAB_START_X = 0
 
 for i, def in ipairs(TAB_DEFS) do
 	local tabContainer              = Instance.new("Frame")
 	tabContainer.Name               = "Tab_" .. def.key
-	tabContainer.Size               = UDim2.new(0, TAB_WIDTH, 0, TAB_BAR_HEIGHT)
-	tabContainer.Position           = UDim2.new(0, (i - 1) * (TAB_WIDTH + TAB_GAP) + 12, 0, 0)
-	tabContainer.BackgroundTransparency = 1
+	tabContainer.Size               = UDim2.new(0, TAB_WIDTH, 1, 0)
+	tabContainer.Position           = UDim2.new(0, TAB_START_X + (i - 1) * TAB_WIDTH, 0, 0)
+	tabContainer.BackgroundColor3   = C.TAB_BG
+	tabContainer.BackgroundTransparency = 0.4
 	tabContainer.ClipsDescendants   = true
 	tabContainer.BorderSizePixel    = 0
 	tabContainer.ZIndex             = 11
 	tabContainer.Parent             = tabBar
-
-	local slantBg              = Instance.new("Frame")
-	slantBg.Name               = "SlantBg"
-	slantBg.Size               = UDim2.new(1, 20, 1, 10)
-	slantBg.Position           = UDim2.new(0.5, 0, 0.5, 0)
-	slantBg.AnchorPoint        = Vector2.new(0.5, 0.5)
-	slantBg.Rotation           = TAB_SLANT_DEGREES
-	slantBg.BackgroundColor3   = C.PANEL2
-	slantBg.BackgroundTransparency = 0.8
-	slantBg.BorderSizePixel    = 0
-	slantBg.ZIndex             = 11
-	slantBg.Parent             = tabContainer
 
 	local tabBtn              = Instance.new("TextButton")
 	tabBtn.Name               = "Button"
@@ -317,7 +339,7 @@ for i, def in ipairs(TAB_DEFS) do
 	local tabLabel            = Instance.new("TextLabel")
 	tabLabel.Size             = UDim2.new(1, 0, 1, 0)
 	tabLabel.BackgroundTransparency = 1
-	tabLabel.Text             = def.icon .. "  " .. def.label
+	tabLabel.Text             = def.label
 	tabLabel.TextColor3       = Color3.fromRGB(180, 182, 195)
 	tabLabel.Font             = Enum.Font.GothamBold
 	tabLabel.TextSize         = 13
@@ -326,31 +348,41 @@ for i, def in ipairs(TAB_DEFS) do
 
 	local activeIndicator              = Instance.new("Frame")
 	activeIndicator.Name               = "ActiveIndicator"
-	activeIndicator.Size               = UDim2.new(0.7, 0, 0, 3)
-	activeIndicator.Position           = UDim2.new(0.15, 0, 1, -3)
+	activeIndicator.Size               = UDim2.new(1, 0, 0, 3)
+	activeIndicator.Position           = UDim2.new(0, 0, 1, -3)
 	activeIndicator.BackgroundColor3   = C.ACCENT
 	activeIndicator.BorderSizePixel    = 0
 	activeIndicator.Visible            = false
 	activeIndicator.ZIndex             = 15
 	activeIndicator.Parent             = tabContainer
 
+	-- Thin vertical divider between tabs
+	if i < #TAB_DEFS then
+		local div            = Instance.new("Frame")
+		div.Size             = UDim2.new(0, 1, 0.5, 0)
+		div.Position         = UDim2.new(1, 0, 0.25, 0)
+		div.BackgroundColor3 = Color3.fromRGB(70, 72, 88)
+		div.BorderSizePixel  = 0
+		div.ZIndex           = 12
+		div.Parent           = tabContainer
+	end
+
 	tabButtons[def.key] = {
 		container = tabContainer,
-		slantBg   = slantBg,
 		button    = tabBtn,
 		label     = tabLabel,
 		indicator = activeIndicator,
-		}
+	}
 end
 
 -- ============================================================
--- CONTENT AREA
+-- CONTENT AREA  (below the tab bar)
 -- ============================================================
 
 local contentArea              = Instance.new("Frame")
 contentArea.Name               = "ContentArea"
-contentArea.Size               = UDim2.new(1, 0, 1, -(TAB_BAR_HEIGHT + 3))
-contentArea.Position           = UDim2.new(0, 0, 0, TAB_BAR_HEIGHT + 3)
+contentArea.Size               = UDim2.new(1, 0, 1, -TAB_BAR_HEIGHT)
+contentArea.Position           = UDim2.new(0, 0, 0, TAB_BAR_HEIGHT)
 contentArea.BackgroundColor3   = C.BG
 contentArea.BackgroundTransparency = 0
 contentArea.BorderSizePixel    = 0
@@ -378,7 +410,113 @@ arrowBtn.Parent             = screenGui
 makeCorner(arrowBtn, 8)
 
 -- ============================================================
--- INVENTORY PANEL
+-- HOME GRID PANEL  (default view – 5 card tiles like reference image)
+-- ============================================================
+
+local GRID_PAD = 10
+
+local homePanel              = Instance.new("Frame")
+homePanel.Name               = "HomePanel"
+homePanel.Size               = UDim2.new(1, 0, 1, 0)
+homePanel.BackgroundTransparency = 1
+homePanel.BorderSizePixel    = 0
+homePanel.Visible            = false
+homePanel.ZIndex             = 6
+homePanel.Parent             = contentArea
+
+-- Helper: create a clickable grid tile
+local function makeTile(parent, size, pos, bgColor, title, subtitle, zIdx)
+	local tile              = Instance.new("Frame")
+	tile.Size               = size
+	tile.Position           = pos
+	tile.BackgroundColor3   = bgColor or C.TILE_BG
+	tile.BorderSizePixel    = 0
+	tile.ZIndex             = zIdx or 7
+	tile.Parent             = parent
+	makeCorner(tile, 6)
+	makeStroke(tile, C.BORDER, 1, 0.35)
+
+	local titleL = makeLabel(tile, title or "",
+		UDim2.new(1, -16, 0, 22),
+		UDim2.new(0, 10, 0, 10),
+		C.TEXT, nil, 1)
+	titleL.TextSize = 14
+	titleL.ZIndex = (zIdx or 7) + 1
+
+	if subtitle then
+		local subL = makeLabel(tile, subtitle,
+			UDim2.new(1, -16, 0, 16),
+			UDim2.new(0, 10, 0, 34),
+			C.TEXTSUB, nil, 1)
+		subL.TextSize = 11
+		subL.Font = Enum.Font.Gotham
+		subL.TextWrapped = true
+		subL.ZIndex = (zIdx or 7) + 1
+	end
+
+	local btn              = Instance.new("TextButton")
+	btn.Size               = UDim2.new(1, 0, 1, 0)
+	btn.BackgroundTransparency = 1
+	btn.Text               = ""
+	btn.ZIndex             = (zIdx or 7) + 2
+	btn.Parent             = tile
+
+	return tile, btn
+end
+
+-- ── Top row: two wide tiles ─────────────────────────────────
+
+-- Left tile (Inventory) – pale gray, ~55 % width
+local invTile, invTileBtn = makeTile(homePanel,
+	UDim2.new(0.55, -GRID_PAD * 0.75, 0.52, -GRID_PAD * 0.75),
+	UDim2.new(0, GRID_PAD, 0, GRID_PAD),
+	C.TILE_BG,
+	"INVENTORY",
+	"Browse towers, view stats & equipment")
+
+-- Right tile (Gacha) – soft pink gradient, ~45 % width
+local gachaTile, gachaTileBtn = makeTile(homePanel,
+	UDim2.new(0.45, -GRID_PAD * 1.25, 0.52, -GRID_PAD * 0.75),
+	UDim2.new(0.55, GRID_PAD * 0.25, 0, GRID_PAD),
+	C.PINK_L,
+	"LIMITED TIME OFFERS!",
+	"Summon new towers – Special banner active")
+
+-- Apply pink gradient on the gacha tile
+local gachaGrad              = Instance.new("UIGradient")
+gachaGrad.Color              = ColorSequence.new(C.PINK_L, C.PINK_R)
+gachaGrad.Rotation           = 0
+gachaGrad.Parent             = gachaTile
+
+-- ── Bottom row: three equal tiles ───────────────────────────
+
+local bottomY  = UDim.new(0.52, GRID_PAD * 0.25)
+local bottomH  = UDim.new(0.48, -GRID_PAD * 1.25)
+local tileW    = UDim.new(1/3, -GRID_PAD * 1.1)
+
+local dailyTile, dailyTileBtn = makeTile(homePanel,
+	UDim2.new(tileW.Scale, tileW.Offset, bottomH.Scale, bottomH.Offset),
+	UDim2.new(0, GRID_PAD, bottomY.Scale, bottomY.Offset),
+	C.TILE_BG,
+	"DAILY QUESTS",
+	"Complete tasks for rewards")
+
+local weeklyTile, weeklyTileBtn = makeTile(homePanel,
+	UDim2.new(tileW.Scale, tileW.Offset, bottomH.Scale, bottomH.Offset),
+	UDim2.new(1/3, GRID_PAD * 0.33, bottomY.Scale, bottomY.Offset),
+	C.TILE_BG,
+	"WEEKLY QUESTS",
+	"Bigger goals, bigger prizes")
+
+local challengeTile, challengeTileBtn = makeTile(homePanel,
+	UDim2.new(tileW.Scale, tileW.Offset, bottomH.Scale, bottomH.Offset),
+	UDim2.new(2/3, -GRID_PAD * 0.33, bottomY.Scale, bottomY.Offset),
+	C.TILE_BG,
+	"CHALLENGES",
+	"Earn special equipment")
+
+-- ============================================================
+-- INVENTORY PANEL  (detailed view)
 -- ============================================================
 
 local invPanel              = Instance.new("Frame")
@@ -707,7 +845,7 @@ local function buildTowerListEntries()
 end
 
 -- ============================================================
--- QUESTS PANEL
+-- QUESTS PANEL  (detailed view)
 -- ============================================================
 
 local questPanel              = Instance.new("Frame")
@@ -739,7 +877,7 @@ local tabDefs = {
 	{ key = "Daily",      label = "DAILY",      layoutOrder = 1 },
 	{ key = "Weekly",     label = "WEEKLY",     layoutOrder = 2 },
 	{ key = "Challenges", label = "CHALLENGES", layoutOrder = 3 },
-	}
+}
 
 local questScrollContainer              = Instance.new("Frame")
 questScrollContainer.Size               = UDim2.new(1, 0, 1, -36)
@@ -907,7 +1045,7 @@ end
 switchQuestTab("Daily")
 
 -- ============================================================
--- GACHA PANEL
+-- GACHA PANEL  (detailed view)
 -- ============================================================
 
 local gachaPanel              = Instance.new("Frame")
@@ -1180,21 +1318,22 @@ gachaResultRemote.OnClientEvent:Connect(function(results: table)
 end)
 
 -- ============================================================
--- PANEL SWITCHING LOGIC
+-- PANEL SWITCHING LOGIC  (home grid + detail panels)
 -- ============================================================
 
 local panels = {
-	inventory = { frame = invPanel,   title = "INVENTORY" },
-	quests    = { frame = questPanel, title = "QUESTS"    },
-	gacha     = { frame = gachaPanel, title = "GACHA"     },
-	}
+	home      = { frame = homePanel,   title = "HOME"      },
+	inventory = { frame = invPanel,    title = "INVENTORY"  },
+	quests    = { frame = questPanel,  title = "QUESTS"     },
+	gacha     = { frame = gachaPanel,  title = "GACHA"      },
+}
 
 local function setTabActive(key: string | nil)
 	for k, info in pairs(tabButtons) do
 		local isActive = (k == key)
 		info.indicator.Visible = isActive
-		info.slantBg.BackgroundColor3     = isActive and C.ACCENT or C.PANEL2
-		info.slantBg.BackgroundTransparency = isActive and 0.15 or 0.8
+		info.container.BackgroundTransparency = isActive and 0 or 0.4
+		info.container.BackgroundColor3       = isActive and C.ACCENT or C.TAB_BG
 		info.label.TextColor3 = isActive and C.WHITE or Color3.fromRGB(180, 182, 195)
 	end
 end
@@ -1214,6 +1353,22 @@ local function openPanel(key: string)
 	end
 end
 
+-- Grid tile click handlers → navigate to detail panels
+invTileBtn.MouseButton1Click:Connect(function()      openPanel("inventory") end)
+gachaTileBtn.MouseButton1Click:Connect(function()    openPanel("gacha")     end)
+dailyTileBtn.MouseButton1Click:Connect(function()
+	switchQuestTab("Daily")
+	openPanel("quests")
+end)
+weeklyTileBtn.MouseButton1Click:Connect(function()
+	switchQuestTab("Weekly")
+	openPanel("quests")
+end)
+challengeTileBtn.MouseButton1Click:Connect(function()
+	switchQuestTab("Challenges")
+	openPanel("quests")
+end)
+
 -- ============================================================
 -- SLIDE ANIMATION  +  CAMERA MANIPULATION
 -- ============================================================
@@ -1229,12 +1384,15 @@ local function slideOpen()
 	panelOpen = true
 	arrowBtn.Text = "▼"
 
-	local targetPos = UDim2.new(0, 0, 1 - PANEL_HEIGHT, 0)
+	-- Tween the panel from off-screen to centre
+	local targetPos = UDim2.new(0.5, 0, 0.5, 0)
 	TweenService:Create(mainPanel, TWEEN_INFO, { Position = targetPos }):Play()
 
-	local arrowTarget = UDim2.new(0.5, -30, 1 - PANEL_HEIGHT, -36)
+	-- Move arrow alongside
+	local arrowTarget = UDim2.new(0.5, -30, 0.14, -20)
 	TweenService:Create(arrowBtn, TWEEN_INFO, { Position = arrowTarget }):Play()
 
+	-- Camera: swing to the side so the character is visible next to the panel
 	originalCameraType = camera.CameraType
 	originalCameraCF   = camera.CFrame
 
@@ -1255,7 +1413,7 @@ local function slideOpen()
 	end
 
 	if not activePanel then
-		openPanel("inventory")
+		openPanel("home")
 	end
 end
 
@@ -1267,7 +1425,7 @@ local function slideClose()
 	panelOpen = false
 	arrowBtn.Text = "▲"
 
-	TweenService:Create(mainPanel, TWEEN_INFO, { Position = UDim2.new(0, 0, 1, 0) }):Play()
+	TweenService:Create(mainPanel, TWEEN_INFO, { Position = UDim2.new(0.5, 0, 1.5, 0) }):Play()
 	TweenService:Create(arrowBtn, TWEEN_INFO, { Position = UDim2.new(0.5, -30, 1, -36) }):Play()
 
 	if originalCameraType then
@@ -1333,7 +1491,7 @@ updateCurrencyRemote.OnClientEvent:Connect(function(data: table)
 	localGems  = data.Gems  or 0
 	coinsLabel.Text = formatNumber(localCoins)
 	gemsLabel.Text  = formatNumber(localGems)
-	end)
+end)
 
 -- ============================================================
 -- GAME STATE TOGGLE
