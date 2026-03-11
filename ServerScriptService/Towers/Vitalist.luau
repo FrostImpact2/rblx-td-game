@@ -9,16 +9,14 @@
 	      Fires in bursts of 8 hitscan shots from the gun barrel.
 	      ATK mode  : each shot deals 0.125× ATK to the targeted enemy.
 	      SUPP mode : each shot heals 0.125× ATK to the nearest ally tower.
-	      Each bullet adds 1 Charge (max 40). At 40 Charge the next
-	      basic attack is replaced by Nano Blast.
 
-	  - Enhanced Attack – Nano Blast:
+	  - Strike Skill – Nano Blast:
+	      Player-triggered (press Q). Does NOT fire automatically.
 	      Fires one large energy burst (hitscan laser from the gun barrel).
-	      ATK mode  : blue laser to the targeted enemy,   2× AP damage,
+	      ATK mode  : blue laser to the targeted enemy,    2× AP damage,
 	                  pierces all enemies along the beam.
 	      SUPP mode : green laser to the nearest ally tower, 2× AP healing.
-	      Resets Charge to 0; triggers a reload animation.
-	      VFX + damage fire only AFTER the enhanced-shoot animation ends.
+	      12-second cooldown after each use.  Triggers a reload animation.
 
 	  - Move Skill – Combat Protocol:
 	      On Move, if the destination is ≤ 8 studs from the tower,
@@ -61,12 +59,12 @@ local Vitalist = {}
 -- ============================================================
 
 Vitalist.BULLETS_PER_BURST      = 8      -- bullets per basic attack
-Vitalist.MAX_CHARGE             = 40     -- charge needed for Nano Blast
 Vitalist.PROTOCOL_SWITCH_RANGE  = 8      -- studs; move within this → switch protocol
 Vitalist.GUN_RAISE_DELAY        = 0.15   -- seconds after raise before first shot
 Vitalist.GUN_LOWER_DELAY        = 3.0    -- seconds without a shot → lower gun
-Vitalist.BURST_SHOT_INTERVAL    = 0.065   -- seconds between individual burst shots
+Vitalist.BURST_SHOT_INTERVAL    = 0.065  -- seconds between individual burst shots
 Vitalist.NANO_PIERCE_RADIUS     = 4.5    -- studs off-axis; enemies within this are pierced
+Vitalist.NANO_BLAST_COOLDOWN    = 12     -- seconds between Nano Blast uses
 
 -- ====== ANIMATION IDs ======
 local IDLE_ANIM_ID            = "rbxassetid://98169705964556"
@@ -87,9 +85,9 @@ local ATK_COLOR  = Color3.fromRGB(50, 150, 255)  -- blue  (damage)
 -- INTERNAL STATE
 -- ============================================================
 
-local animState   = {}  -- tower → animation-state record
-local baseC0s     = {}  -- tower → stored Motor6D C0 values
-local chargeGuis  = {}  -- tower → charge-display billboard data
+local animState          = {}  -- tower → animation-state record
+local baseC0s            = {}  -- tower → stored Motor6D C0 values
+local nanoblastLastFire  = {}  -- tower → tick() when Nano Blast last fired
 
 -- ============================================================
 -- INTERNAL HELPERS
@@ -235,84 +233,12 @@ local function getEnemiesAlongRay(
 end
 
 -- ============================================================
--- CHARGE DISPLAY
+-- NANO BLAST COOLDOWN QUERY
 -- ============================================================
 
-function Vitalist.CreateChargeDisplay(tower: Model)
-	if chargeGuis[tower] then return end
-
-	local head = tower:FindFirstChild("Head") or tower.PrimaryPart
-	if not head then return end
-
-	local billboard = Instance.new("BillboardGui")
-	billboard.Name           = "ChargeDisplay"
-	-- Slightly wider and taller than the HP bar (4.5 studs wide × 0.55 studs tall vs HP bar's 4 × 0.4)
-	billboard.Size           = UDim2.new(4.5, 0, 0.55, 0)
-	billboard.StudsOffset    = Vector3.new(0, 3.8, 0)
-	billboard.AlwaysOnTop    = false
-	billboard.ResetOnSpawn   = false
-	billboard.LightInfluence = 0
-	billboard.Parent         = head
-
-	-- Outer black border (matches HP bar style)
-	local outline = Instance.new("Frame")
-	outline.Name             = "Outline"
-	outline.Size             = UDim2.new(1, 0, 1, 0)
-	outline.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-	outline.BorderSizePixel  = 0
-	outline.Parent           = billboard
-
-	-- Dark background
-	local bg = Instance.new("Frame")
-	bg.Name             = "ChargeBg"
-	bg.Size             = UDim2.new(1, -2, 1, -2)
-	bg.Position         = UDim2.new(0, 1, 0, 1)
-	bg.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
-	bg.BorderSizePixel  = 0
-	bg.Parent           = outline
-
-	-- Fill bar
-	local fill = Instance.new("Frame")
-	fill.Name             = "ChargeFill"
-	fill.Size             = UDim2.new(0, 0, 1, 0)
-	fill.BackgroundColor3 = ATK_COLOR
-	fill.BorderSizePixel  = 0
-	fill.Parent           = bg
-
-	-- Charge text (matches HP bar text style)
-	local label = Instance.new("TextLabel")
-	label.Name                   = "ChargeText"
-	label.Size                   = UDim2.new(1, 0, 1, 0)
-	label.BackgroundTransparency = 1
-	label.Text                   = "0 / 40"
-	label.TextColor3             = Color3.fromRGB(255, 255, 255)
-	label.TextScaled             = true
-	label.Font                   = Enum.Font.SourceSans
-	label.TextStrokeTransparency = 0.5
-	label.Parent                 = bg
-
-	chargeGuis[tower] = { billboard = billboard, fill = fill, label = label }
-end
-
-function Vitalist.UpdateChargeDisplay(tower: Model)
-	local data = chargeGuis[tower]
-	if not data then return end
-
-	local charge   = tower:GetAttribute("Charge")   or 0
-	local protocol = tower:GetAttribute("Protocol") or "ATK"
-	local ratio    = math.clamp(charge / Vitalist.MAX_CHARGE, 0, 1)
-	data.fill.Size = UDim2.new(ratio, 0, 1, 0)
-
-	-- Yellow when ready for Nano Blast, otherwise ATK/SUPP colour
-	if charge >= Vitalist.MAX_CHARGE then
-		data.fill.BackgroundColor3 = Color3.fromRGB(220, 220, 60)
-	else
-		data.fill.BackgroundColor3 = (protocol == "SUPP") and SUPP_COLOR or ATK_COLOR
-	end
-
-	if data.label then
-		data.label.Text = charge .. " / " .. Vitalist.MAX_CHARGE
-	end
+function Vitalist.IsNanoBlastReady(tower: Model): boolean
+	local lastFire = nanoblastLastFire[tower] or -math.huge
+	return (tick() - lastFire) >= Vitalist.NANO_BLAST_COOLDOWN
 end
 
 -- ============================================================
@@ -768,7 +694,7 @@ function Vitalist.CreateModel(position: Vector3, TowerStats: any): Model?
 	circle.Size         = Vector3.new(0.15, rangeStuds * 2, rangeStuds * 2)
 	circle.Anchored     = true
 	circle.CanCollide   = false
-	circle.Color        = Color3.fromRGB(50, 180, 80)
+	circle.Color        = Color3.fromRGB(30, 120, 215)
 	circle.Transparency = 1
 	circle.Material     = Enum.Material.SmoothPlastic
 	circle.Parent       = model
@@ -785,7 +711,6 @@ function Vitalist.CreateModel(position: Vector3, TowerStats: any): Model?
 	model:SetAttribute("State",       "Idle")
 	model:SetAttribute("Owner",       "")
 	model:SetAttribute("TowerType",   "Vitalist")
-	model:SetAttribute("Charge",      0)
 	model:SetAttribute("Protocol",    "ATK")  -- "ATK" or "SUPP"
 
 	model:PivotTo(CFrame.new(position))
@@ -889,8 +814,6 @@ function Vitalist.TriggerProtocolSwitch(tower: Model)
 		Enum.AnimationPriority.Action4, 0.1
 	)
 	st.switchTrack = switchTrack
-
-	Vitalist.UpdateChargeDisplay(tower)
 end
 
 -- ============================================================
@@ -900,8 +823,6 @@ end
 function Vitalist.InitTower(tower: Model)
 	local st = getAnimState(tower)
 	playIdle(tower, st)
-	Vitalist.CreateChargeDisplay(tower)
-	Vitalist.UpdateChargeDisplay(tower)
 end
 
 function Vitalist.IsReadyToFire(tower: Model): boolean
@@ -963,7 +884,7 @@ end
 
 --[[
 	target        : primary target (enemy Model in ATK, ally tower Model in SUPP).
-	enemiesFolder : used for Nano Blast pierce scan and retargeting.
+	enemiesFolder : used for retargeting in ATK mode.
 	towersFolder  : used for SUPP retargeting.
 ]]
 function Vitalist.DoAttack(
@@ -977,13 +898,10 @@ function Vitalist.DoAttack(
 	if tick() < st.burstEndTime then return false end
 
 	local atk      = tower:GetAttribute("ATK")        or 12
-	local ap       = tower:GetAttribute("AP")          or 18
 	local multi    = tower:GetAttribute("DamageMulti") or 1.0
-	local charge   = tower:GetAttribute("Charge")      or 0
 	local protocol = tower:GetAttribute("Protocol")    or "ATK"
 
-	local isEnhanced = (charge >= Vitalist.MAX_CHARGE)
-	local beamColor  = (protocol == "SUPP") and SUPP_COLOR or ATK_COLOR
+	local beamColor = (protocol == "SUPP") and SUPP_COLOR or ATK_COLOR
 
 	-- Grab the remote once, used throughout
 	local indicatorRemote = ReplicatedStorage:FindFirstChild("ShowDamageIndicator")
@@ -999,128 +917,6 @@ function Vitalist.DoAttack(
 		if flatDir.Magnitude > 0.1 then
 			torso.CFrame = CFrame.new(torso.Position, torso.Position + flatDir.Unit)
 		end
-	end
-
-	-- ── ENHANCED: Nano Blast ──────────────────────────────────────────────
-	if isEnhanced then
-		tower:SetAttribute("Charge", 0)
-		Vitalist.UpdateChargeDisplay(tower)
-
-		local blastTarget = target
-		local blastRange  = tower:GetAttribute("RNG") * 2 or 40
-
-		if protocol == "SUPP" and towersFolder then
-			local pos         = torso and torso.Position or Vector3.zero
-			local bestHPRatio = math.huge
-			local bestTower   = nil
-			for _, t in ipairs(towersFolder:GetChildren()) do
-				if t:IsA("Model") and t ~= tower and t.PrimaryPart then
-					local hp    = t:GetAttribute("HP")    or 0
-					local maxHP = t:GetAttribute("MaxHP") or 1
-					local d     = (t.PrimaryPart.Position - pos).Magnitude
-					if d <= blastRange and hp > 0 and hp < maxHP then
-						local ratio = hp / maxHP
-						if ratio < bestHPRatio then
-							bestHPRatio = ratio
-							bestTower   = t
-						end
-					end
-				end
-			end
-			if bestTower then blastTarget = bestTower end
-
-		elseif protocol == "ATK" and enemiesFolder then
-			local pos       = torso and torso.Position or Vector3.zero
-			local bestWP    = -math.huge
-			local bestDist  = math.huge
-			local bestEnemy = nil
-			for _, e in ipairs(enemiesFolder:GetChildren()) do
-				if e:IsA("Model") and e.PrimaryPart and (e:GetAttribute("HP") or 0) > 0 then
-					local d = (e.PrimaryPart.Position - pos).Magnitude
-					if d <= blastRange then
-						local wp = e:GetAttribute("WaypointIndex") or 0
-						if wp > bestWP or (wp == bestWP and d < bestDist) then
-							bestWP    = wp
-							bestDist  = d
-							bestEnemy = e
-						end
-					end
-				end
-			end
-			if bestEnemy then blastTarget = bestEnemy end
-		end
-
-		if not blastTarget or not blastTarget.Parent or not blastTarget.PrimaryPart then
-			return false
-		end
-
-		local blastDmg = ap * multi * 2
-
-		local animator = getOrCreateAnimator(tower)
-		safeStop(st.gunIdleTrack, 0.1)
-		safeDestroy(st.enhShootTrack)
-
-		local enhTrack = animator and loadAndPlay(
-			animator, ENHANCED_SHOOT_ANIM_ID, false,
-			Enum.AnimationPriority.Action4, 0.05
-		) or nil
-		st.enhShootTrack = enhTrack
-
-		task.spawn(function()
-			if not tower or not tower.Parent then return end
-
-			local fromPos = getBarrelPos(tower)
-
-			if protocol == "ATK" and enemiesFolder then
-				local aimDir  = (blastTarget.PrimaryPart.Position - fromPos)
-				local pierced = getEnemiesAlongRay(fromPos, aimDir, blastRange, Vitalist.NANO_PIERCE_RADIUS, enemiesFolder)
-				local beamEnd = fromPos + aimDir.Unit * blastRange
-
-				Vitalist.SpawnMuzzleFlash(fromPos, beamColor, true)
-				Vitalist.SpawnHitscanBeam(fromPos, beamEnd, beamColor, true)
-
-				for _, e in ipairs(pierced) do
-					if e and e.Parent and e.PrimaryPart then
-						local impactPos = e.PrimaryPart.Position
-						local hp        = e:GetAttribute("HP") or 0
-						local newHP     = hp - blastDmg
-						e:SetAttribute("HP", newHP)
-						Vitalist.SpawnEnhancedHitVFX(impactPos, beamColor)
-						-- ✅ Nano Blast damage indicator
-						if indicatorRemote then
-							indicatorRemote:FireAllClients(impactPos, blastDmg, "Nano")
-						end
-						if newHP <= 0 and e.Parent then
-							e:Destroy()
-						end
-					end
-				end
-
-			else
-				-- SUPP single-target Nano heal
-				if blastTarget.Parent and blastTarget.PrimaryPart then
-					local impactPos = blastTarget.PrimaryPart.Position
-					local hp        = blastTarget:GetAttribute("HP")    or 0
-					local maxHP     = blastTarget:GetAttribute("MaxHP") or 1
-					local healAmt   = math.min(blastDmg, maxHP - hp)
-					blastTarget:SetAttribute("HP", math.min(hp + blastDmg, maxHP))
-					Vitalist.SpawnMuzzleFlash(fromPos, beamColor, true)
-					Vitalist.SpawnHitscanBeam(fromPos, impactPos, beamColor, true)
-					Vitalist.SpawnEnhancedHitVFX(impactPos, beamColor)
-					-- ✅ Nano Blast heal indicator
-					if indicatorRemote then
-						indicatorRemote:FireAllClients(impactPos, healAmt, "Heal")
-					end
-				end
-			end
-
-			if tower and tower.Parent then
-				triggerReload(tower, st)
-			end
-		end)
-
-		st.lastShotTime = tick()
-		return true
 	end
 
 	-- ── NORMAL BURST: 8 hitscan shots ────────────────────────────────────
@@ -1147,7 +943,6 @@ function Vitalist.DoAttack(
 					if hp < maxHP then
 						local healAmt = math.min(bulletDmg, maxHP - hp)
 						target:SetAttribute("HP", math.min(hp + bulletDmg, maxHP))
-						-- ✅ Normal heal indicator
 						if indicatorRemote then
 							indicatorRemote:FireAllClients(impactPos, healAmt, "Heal")
 						end
@@ -1156,7 +951,6 @@ function Vitalist.DoAttack(
 					local hp    = target:GetAttribute("HP") or 0
 					local newHP = hp - bulletDmg
 					target:SetAttribute("HP", newHP)
-					-- ✅ Normal ATK damage indicator
 					if indicatorRemote then
 						indicatorRemote:FireAllClients(impactPos, bulletDmg, "Normal")
 					end
@@ -1175,10 +969,6 @@ function Vitalist.DoAttack(
 				end
 
 				playShootOnce(tower, st)
-
-				local newCharge = math.min((tower:GetAttribute("Charge") or 0) + 1, Vitalist.MAX_CHARGE)
-				tower:SetAttribute("Charge", newCharge)
-				Vitalist.UpdateChargeDisplay(tower)
 
 				st.lastShotTime = tick()
 
@@ -1199,7 +989,164 @@ function Vitalist.DoAttack(
 	end)
 
 	return true
-end 
+end
+
+-- ============================================================
+-- PUBLIC – STRIKE SKILL: NANO BLAST
+-- ============================================================
+
+--[[
+	Player-triggered strike skill.  Does NOT fire automatically.
+	ATK  : blue laser to the targeted enemy (2× AP damage, pierces).
+	SUPP : green laser to the nearest ally tower (2× AP healing).
+	Cooldown: Vitalist.NANO_BLAST_COOLDOWN seconds.
+]]
+function Vitalist.FireNanoBlast(
+	tower: Model,
+	enemiesFolder: Folder?,
+	towersFolder: Folder?
+): boolean
+	-- Cooldown guard
+	if not Vitalist.IsNanoBlastReady(tower) then return false end
+
+	local st = getAnimState(tower)
+	if st.reloading then return false end
+
+	local ap       = tower:GetAttribute("AP")          or 18
+	local multi    = tower:GetAttribute("DamageMulti") or 1.0
+	local protocol = tower:GetAttribute("Protocol")    or "ATK"
+	local torso    = tower.PrimaryPart
+
+	local beamColor = (protocol == "SUPP") and SUPP_COLOR or ATK_COLOR
+	local blastDmg  = ap * multi * 2
+	local blastRange = (tower:GetAttribute("RNG") or 20) * 2
+
+	-- Record use time
+	nanoblastLastFire[tower] = tick()
+
+	-- Find best target
+	local blastTarget: Model? = nil
+
+	if protocol == "SUPP" and towersFolder then
+		local pos = torso and torso.Position or Vector3.zero
+		local bestHPRatio = math.huge
+		for _, t in ipairs(towersFolder:GetChildren()) do
+			if t:IsA("Model") and t ~= tower and t.PrimaryPart then
+				local hp    = t:GetAttribute("HP")    or 0
+				local maxHP = t:GetAttribute("MaxHP") or 1
+				local d     = (t.PrimaryPart.Position - pos).Magnitude
+				if d <= blastRange and hp > 0 and hp < maxHP then
+					local ratio = hp / maxHP
+					if ratio < bestHPRatio then
+						bestHPRatio = ratio
+						blastTarget = t
+					end
+				end
+			end
+		end
+
+	elseif protocol == "ATK" and enemiesFolder then
+		local pos = torso and torso.Position or Vector3.zero
+		local bestWP   = -math.huge
+		local bestDist = math.huge
+		for _, e in ipairs(enemiesFolder:GetChildren()) do
+			if e:IsA("Model") and e.PrimaryPart and (e:GetAttribute("HP") or 0) > 0 then
+				local d = (e.PrimaryPart.Position - pos).Magnitude
+				if d <= blastRange then
+					local wp = e:GetAttribute("WaypointIndex") or 0
+					if wp > bestWP or (wp == bestWP and d < bestDist) then
+						bestWP    = wp
+						bestDist  = d
+						blastTarget = e
+					end
+				end
+			end
+		end
+	end
+
+	if not blastTarget or not blastTarget.Parent or not blastTarget.PrimaryPart then
+		-- No valid target – still consume cooldown since it was intentional
+		return true
+	end
+
+	-- Face the target
+	if torso and blastTarget.PrimaryPart then
+		local flatDir = Vector3.new(
+			blastTarget.PrimaryPart.Position.X - torso.Position.X,
+			0,
+			blastTarget.PrimaryPart.Position.Z - torso.Position.Z
+		)
+		if flatDir.Magnitude > 0.1 then
+			torso.CFrame = CFrame.new(torso.Position, torso.Position + flatDir.Unit)
+		end
+	end
+
+	local indicatorRemote = ReplicatedStorage:FindFirstChild("ShowDamageIndicator")
+
+	local animator = getOrCreateAnimator(tower)
+	safeStop(st.gunIdleTrack, 0.1)
+	safeDestroy(st.enhShootTrack)
+
+	local enhTrack = animator and loadAndPlay(
+		animator, ENHANCED_SHOOT_ANIM_ID, false,
+		Enum.AnimationPriority.Action4, 0.05
+	) or nil
+	st.enhShootTrack = enhTrack
+
+	task.spawn(function()
+		if not tower or not tower.Parent then return end
+
+		local fromPos = getBarrelPos(tower)
+
+		if protocol == "ATK" and enemiesFolder then
+			local aimDir  = (blastTarget.PrimaryPart.Position - fromPos)
+			local pierced = getEnemiesAlongRay(fromPos, aimDir, blastRange, Vitalist.NANO_PIERCE_RADIUS, enemiesFolder)
+			local beamEnd = fromPos + aimDir.Unit * blastRange
+
+			Vitalist.SpawnMuzzleFlash(fromPos, beamColor, true)
+			Vitalist.SpawnHitscanBeam(fromPos, beamEnd, beamColor, true)
+
+			for _, e in ipairs(pierced) do
+				if e and e.Parent and e.PrimaryPart then
+					local impactPos = e.PrimaryPart.Position
+					local hp        = e:GetAttribute("HP") or 0
+					local newHP     = hp - blastDmg
+					e:SetAttribute("HP", newHP)
+					Vitalist.SpawnEnhancedHitVFX(impactPos, beamColor)
+					if indicatorRemote then
+						indicatorRemote:FireAllClients(impactPos, blastDmg, "Nano")
+					end
+					if newHP <= 0 and e.Parent then
+						e:Destroy()
+					end
+				end
+			end
+
+		else
+			-- SUPP: single-target heal
+			if blastTarget.Parent and blastTarget.PrimaryPart then
+				local impactPos = blastTarget.PrimaryPart.Position
+				local hp        = blastTarget:GetAttribute("HP")    or 0
+				local maxHP     = blastTarget:GetAttribute("MaxHP") or 1
+				local healAmt   = math.min(blastDmg, maxHP - hp)
+				blastTarget:SetAttribute("HP", math.min(hp + blastDmg, maxHP))
+				Vitalist.SpawnMuzzleFlash(fromPos, beamColor, true)
+				Vitalist.SpawnHitscanBeam(fromPos, impactPos, beamColor, true)
+				Vitalist.SpawnEnhancedHitVFX(impactPos, beamColor)
+				if indicatorRemote then
+					indicatorRemote:FireAllClients(impactPos, healAmt, "Heal")
+				end
+			end
+		end
+
+		if tower and tower.Parent then
+			triggerReload(tower, st)
+		end
+	end)
+
+	st.lastShotTime = tick()
+	return true
+end
 
 -- ============================================================
 -- CLEANUP
@@ -1220,13 +1167,8 @@ function Vitalist.CleanupTower(tower: Model)
 		animState[tower] = nil
 	end
 
-	baseC0s[tower] = nil
-
-	local cd = chargeGuis[tower]
-	if cd then
-		pcall(function() cd.billboard:Destroy() end)
-		chargeGuis[tower] = nil
-	end
+	baseC0s[tower]           = nil
+	nanoblastLastFire[tower] = nil
 end
 
 return Vitalist

@@ -14,6 +14,7 @@ local playerGui = player:WaitForChild("PlayerGui")
 
 local placeRemote = ReplicatedStorage:WaitForChild("PlaceTower", 10)
 local moveRemote  = ReplicatedStorage:WaitForChild("MoveTower", 10)
+local strikeSkillRemote = ReplicatedStorage:WaitForChild("StrikeSkill", 10)
 
 local towersFolder  = Workspace:WaitForChild("Towers", 15)
 local enemiesFolder = Workspace:WaitForChild("Enemies", 15)
@@ -22,6 +23,12 @@ local placing = false
 local selectedTower = "Warrior"
 local selectedTowerModel: Model? = nil
 local canPlace = false
+
+-- Strike Skill aiming state (Dynamite)
+local strikeAiming       = false       -- true while aiming Dynamite placement
+local strikeTowerModel: Model? = nil   -- the Deadeye tower for which we're aiming
+local strikeGhost: Part? = nil         -- ghost indicator for Dynamite target
+local strikeCanPlace     = false       -- valid dynamite placement position
 
 local ghostFolder: Folder? = nil
 local ghostParts = {}
@@ -35,10 +42,13 @@ local towerBarAttachments = {}
 local PLACE_KEY_DEADEYE  = Enum.KeyCode.T
 local PLACE_KEY_WARRIOR  = Enum.KeyCode.U
 local PLACE_KEY_VITALIST = Enum.KeyCode.Y
+local STRIKE_SKILL_KEY   = Enum.KeyCode.Q
 local GHOST_TRANSPARENCY = 0.5
 local VALID_COLOR   = Color3.fromRGB(100, 255, 100)
 local INVALID_COLOR = Color3.fromRGB(255, 80, 80)
 local HP_BAR_GAP    = 1.5
+
+local DYNAMITE_RANGE = 8  -- must match Deadeye.DYNAMITE_RANGE on server
 
 local TOWER_RANGE_STUDS = {
 	Warrior  = 8,
@@ -128,7 +138,7 @@ local function createGhost()
 	local range = Instance.new("Part")
 	range.Name = "RangePreview"; range.Shape = Enum.PartType.Cylinder
 	range.Size = Vector3.new(0.15, rangeStuds * 2, rangeStuds * 2)
-	range.Color = Color3.fromRGB(100, 200, 100); range.Transparency = 0.7
+	range.Color = Color3.fromRGB(50, 150, 255); range.Transparency = 0.7
 	range.Anchored = true; range.CanCollide = false
 	range.Material = Enum.Material.SmoothPlastic
 	range.CFrame = CFrame.new(0, -1000, 0); range.Parent = folder
@@ -219,9 +229,17 @@ local function stopPlacing()
 end
 
 local function startPlacing(towerType: string)
+	-- Cancel strike aiming if active (connection will be replaced below)
+	if strikeAiming then
+		if strikeGhost and strikeGhost.Parent then strikeGhost:Destroy() end
+		strikeGhost      = nil
+		strikeAiming     = false
+		strikeTowerModel = nil
+	end
 	if placing and selectedTower == towerType then stopPlacing(); return end
 	selectedTower = towerType
 	placing = true; deselectTower(); createGhost()
+	if updateConnection then updateConnection:Disconnect(); updateConnection = nil end
 	updateConnection = RunService.RenderStepped:Connect(function()
 		if placing then updateGhostPosition() end
 	end)
@@ -250,6 +268,11 @@ local TOWER_PANEL_DATA = {
 		upgradeName  = "Productive Work Effort Initiative",
 		level        = 0,
 		maxLevel     = 3,
+		strikeSkill  = {
+			name    = "DYNAMITE  [Q]",
+			desc    = "Place within 8 RNG. Deadeye auto-targets it with Headhunter. Explodes for 0.6× ATK AoE + 0.2× AP/s fire (3s).",
+			skillId = "Dynamite",
+		},
 	},
 	Vitalist = {
 		displayName  = "Vitalist",
@@ -259,6 +282,11 @@ local TOWER_PANEL_DATA = {
 		upgradeName  = "Medical Supply Enhancement",
 		level        = 0,
 		maxLevel     = 3,
+		strikeSkill  = {
+			name    = "NANO BLAST  [Q]",
+			desc    = "SUPP: green laser heals nearest ally 2× AP. ATK: blue laser deals 2× AP. 12s cooldown.",
+			skillId = "NanoBlast",
+		},
 	},
 	Warrior = {
 		displayName  = "Warrior",
@@ -273,7 +301,7 @@ local TOWER_PANEL_DATA = {
 
 -- Panel dimensions
 local PANEL_W = 540
-local PANEL_H = 310
+local PANEL_H = 365  -- extra 55 px for the Strike Skill section
 
 -- Helper: make a UICorner
 local function corner(parent, radius)
@@ -644,6 +672,57 @@ local function createInfoGui(towerModel: Model)
 		end
 	end
 
+	-- ── Strike Skill section ────────────────────────────────────────────────
+	if info.strikeSkill then
+		-- Thin divider above strike skill section
+		makeFrame(panel, {
+			Size             = UDim2.new(1, -16, 0, 1),
+			Position         = UDim2.new(0, 8, 0, 277),
+			BackgroundColor3 = Color3.fromRGB(80, 86, 100),
+		})
+
+		-- Section header
+		makeLabel(panel, {
+			Size           = UDim2.new(1, -16, 0, 16),
+			Position       = UDim2.new(0, 8, 0, 281),
+			Text           = "STRIKE SKILL",
+			TextColor3     = Color3.fromRGB(255, 200, 50),
+			Font           = Enum.Font.GothamBold,
+			TextSize       = 12,
+			TextXAlignment = Enum.TextXAlignment.Left,
+		})
+
+		-- Skill name badge
+		local nameBadge = makeFrame(panel, {
+			Size             = UDim2.new(0, 180, 0, 22),
+			Position         = UDim2.new(0, 8, 0, 298),
+			BackgroundColor3 = Color3.fromRGB(45, 55, 70),
+		})
+		corner(nameBadge, 5)
+		makeLabel(nameBadge, {
+			Size           = UDim2.new(1, -8, 1, 0),
+			Position       = UDim2.new(0, 4, 0, 0),
+			Text           = info.strikeSkill.name,
+			TextColor3     = Color3.fromRGB(100, 200, 255),
+			Font           = Enum.Font.GothamBold,
+			TextSize       = 12,
+			TextXAlignment = Enum.TextXAlignment.Left,
+		})
+
+		-- Skill description
+		makeLabel(panel, {
+			Size           = UDim2.new(1, -200, 0, 44),
+			Position       = UDim2.new(0, 196, 0, 278),
+			Text           = info.strikeSkill.desc,
+			TextColor3     = Color3.fromRGB(185, 192, 208),
+			Font           = Enum.Font.Gotham,
+			TextSize       = 10,
+			TextWrapped    = true,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Top,
+		})
+	end
+
 	infoGui = gui
 end
 
@@ -805,21 +884,109 @@ RunService.RenderStepped:Connect(function(dt)
 end)
 
 -- ============================================================
+-- STRIKE SKILL AIMING (Dynamite)
+-- ============================================================
+
+local function stopStrikeAiming()
+	if strikeGhost and strikeGhost.Parent then strikeGhost:Destroy() end
+	strikeGhost      = nil
+	strikeAiming     = false
+	strikeTowerModel = nil
+	if updateConnection then updateConnection:Disconnect(); updateConnection = nil end
+end
+
+local function startStrikeAiming(towerModel: Model)
+	if placing then stopPlacing() end
+	stopStrikeAiming()
+	strikeAiming     = true
+	strikeTowerModel = towerModel
+
+	local g = Instance.new("Part")
+	g.Name         = "DynamiteGhost"
+	g.Shape        = Enum.PartType.Cylinder
+	g.Size         = Vector3.new(0.5, 1.0, 1.0)
+	g.Color        = Color3.fromRGB(255, 140, 20)
+	g.Transparency = 0.3
+	g.Material     = Enum.Material.Neon
+	g.Anchored     = true
+	g.CanCollide   = false
+	g.CFrame       = CFrame.new(0, -1000, 0)
+	g.Parent       = Workspace
+	strikeGhost    = g
+
+	updateConnection = RunService.RenderStepped:Connect(function()
+		if not strikeAiming then return end
+
+		local groundPos = raycastGround()
+		if not groundPos or not strikeTowerModel or not strikeTowerModel.PrimaryPart then
+			strikeCanPlace = false
+			if strikeGhost then strikeGhost.Color = Color3.fromRGB(255, 80, 80) end
+			return
+		end
+
+		local towerPos = strikeTowerModel.PrimaryPart.Position
+		local flatDist = Vector3.new(groundPos.X - towerPos.X, 0, groundPos.Z - towerPos.Z).Magnitude
+
+		strikeCanPlace = (flatDist <= DYNAMITE_RANGE)
+
+		if strikeGhost then
+			strikeGhost.CFrame = CFrame.new(groundPos.X, groundPos.Y + 0.3, groundPos.Z) * CFrame.Angles(0, 0, math.rad(90))
+			strikeGhost.Color  = strikeCanPlace
+				and Color3.fromRGB(255, 140, 20)
+				or  Color3.fromRGB(255, 60,  60)
+		end
+	end)
+end
+
+-- ============================================================
 -- INPUT
 -- ============================================================
 
 UserInputService.InputBegan:Connect(function(input, processed)
 	if processed then return end
+
 	if input.KeyCode == PLACE_KEY_DEADEYE then
 		startPlacing("Deadeye")
 	elseif input.KeyCode == PLACE_KEY_VITALIST then
 		startPlacing("Vitalist")
 	elseif input.KeyCode == PLACE_KEY_WARRIOR then
 		startPlacing("Warrior")
+
+	elseif input.KeyCode == STRIKE_SKILL_KEY then
+		-- Cancel strike aiming if already active
+		if strikeAiming then
+			stopStrikeAiming()
+			return
+		end
+		-- Only works when a tower with a strike skill is selected
+		if not selectedTowerModel or not selectedTowerModel.Parent then return end
+		local towerType = selectedTowerModel:GetAttribute("TowerType")
+		local panelData = TOWER_PANEL_DATA[towerType]
+		if not panelData or not panelData.strikeSkill then return end
+
+		if towerType == "Deadeye" then
+			startStrikeAiming(selectedTowerModel)
+
+		elseif towerType == "Vitalist" then
+			-- Nano Blast: fire immediately
+			strikeSkillRemote:FireServer(selectedTowerModel, "NanoBlast", nil)
+		end
 	end
 end)
 
 mouse.Button1Down:Connect(function()
+	-- Dynamite placement confirmation
+	if strikeAiming then
+		if strikeCanPlace then
+			local groundPos = raycastGround()
+			if groundPos and strikeTowerModel and strikeTowerModel.PrimaryPart then
+				strikeSkillRemote:FireServer(strikeTowerModel, "Dynamite", groundPos)
+			end
+		end
+		stopStrikeAiming()
+		return
+	end
+
 	if placing then
 		if not canPlace then return end
 		local groundPos = raycastGround()
@@ -835,6 +1002,7 @@ mouse.Button1Down:Connect(function()
 end)
 
 mouse.Button2Down:Connect(function()
+	if strikeAiming then stopStrikeAiming(); return end
 	if placing then stopPlacing(); return end
 	if selectedTowerModel and selectedTowerModel.Parent then
 		local state = selectedTowerModel:GetAttribute("State") or "Idle"

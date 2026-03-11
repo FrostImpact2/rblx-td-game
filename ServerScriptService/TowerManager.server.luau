@@ -64,6 +64,10 @@ local moveRemote        = Instance.new("RemoteEvent")
 moveRemote.Name         = "MoveTower"
 moveRemote.Parent       = ReplicatedStorage
 
+local strikeSkillRemote  = Instance.new("RemoteEvent")
+strikeSkillRemote.Name   = "StrikeSkill"
+strikeSkillRemote.Parent = ReplicatedStorage
+
 local playEnemyPunchRemote = ReplicatedStorage:WaitForChild("PlayEnemyPunch", 10)
 
 local pathFolder      = Workspace:WaitForChild("Path", 10)
@@ -76,6 +80,13 @@ local cachedWaypoints = pathFolder and PathfindingModule.BuildWaypoints(pathFold
 local aggroMap     = {}  -- tower  -> enemy
 local enemyAggroBy = {}  -- enemy  -> tower
 local activePushes = {}  -- enemy  -> RBXScriptConnection
+
+-- ============================================================
+-- BURN / FIRE STATE  (from Dynamite explosions)
+-- ============================================================
+
+-- enemy -> { burnUntil: number, burnDPS: number, lastTick: number }
+local burnMap = {}
 
 -- ============================================================
 -- PATH HELPERS
@@ -450,6 +461,50 @@ local function onTowerPlaced(tower: Model)
 end
 
 -- ============================================================
+-- DYNAMITE EXPLOSION HELPER
+-- ============================================================
+
+local function triggerDynamiteExplosion(tower: Model, dynamiteModel: Model)
+	local torso = tower.PrimaryPart
+	if not torso then return end
+
+	local atk = tower:GetAttribute("ATK") or 12
+	local ap  = tower:GetAttribute("AP")  or 15
+	local multi = tower:GetAttribute("DamageMulti") or 1.0
+
+	local aoeDamage = atk * multi * 0.6
+	local burnDPS   = ap  * multi * 0.2
+	local explodePos = dynamiteModel.PrimaryPart and dynamiteModel.PrimaryPart.Position or torso.Position
+
+	Deadeye.SpawnExplosionVFX(explodePos)
+
+	local radius = Deadeye.DYNAMITE_EXPLOSION_RADIUS
+	local now    = tick()
+
+	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+		if enemy:IsA("Model") and enemy.PrimaryPart and (enemy:GetAttribute("HP") or 0) > 0 then
+			local dist = (enemy.PrimaryPart.Position - explodePos).Magnitude
+			if dist <= radius then
+				-- AoE damage
+				local hp    = enemy:GetAttribute("HP") or 0
+				local newHP = hp - aoeDamage
+				enemy:SetAttribute("HP", newHP)
+				damageIndicatorRemote:FireAllClients(enemy.PrimaryPart.Position, aoeDamage, "Critical")
+				-- Apply / refresh burn
+				burnMap[enemy] = {
+					burnUntil = now + Deadeye.DYNAMITE_BURN_DURATION,
+					burnDPS   = burnDPS,
+					lastTick  = now,
+				}
+				if newHP <= 0 and enemy.Parent then
+					enemy:Destroy()
+				end
+			end
+		end
+	end
+end
+
+-- ============================================================
 -- TOWER AI LOOP + SURVIVOR PASSIVE
 -- ============================================================
 
@@ -562,9 +617,38 @@ RunService.Heartbeat:Connect(function()
 		if not target then
 			-- No target: clear locked HH target, hide aim laser, and tick Deadeye animation
 			if towerType == "Deadeye" then
-				hhLockedTarget[tower] = nil
-				Deadeye.HideAimLaser(tower)
-				Deadeye.UpdateCombatState(tower, false, nil)
+				-- Exception: if Deadeye is enhanced and has a dynamite in range, keep targeting it
+				local count2   = tower:GetAttribute("BasicAttackCount") or 0
+				local enhanced = count2 >= Deadeye.ENHANCE_AFTER
+				local dynaTemp = enhanced and Deadeye.GetDynamite(tower) or nil
+				local torsoT   = tower.PrimaryPart
+				if dynaTemp and torsoT then
+					local dynRange = tower:GetAttribute("RNG") or 30
+					if (dynaTemp.PrimaryPart.Position - torsoT.Position).Magnitude > dynRange then
+						dynaTemp = nil
+					end
+				end
+
+				if dynaTemp then
+					-- Drive toward the dynamite instead of idling
+					local atkSpd2 = tower:GetAttribute("ATK_SPD") or 1
+					hhLockedTarget[tower] = dynaTemp
+					Deadeye.UpdateCombatState(tower, true, dynaTemp)
+					if Deadeye.IsReadyToFire(tower) and (now - data.lastAttackTime) >= 1 / atkSpd2 then
+						if Deadeye.TickHeadhunterAim(tower, dynaTemp) then
+							hhLockedTarget[tower] = nil
+							tower:SetAttribute("State", "Attacking")
+							data.lastAttackTime = now
+							Deadeye.DoAttackDynamite(tower, dynaTemp)
+							triggerDynamiteExplosion(tower, dynaTemp)
+							Deadeye.RemoveDynamite(tower)
+						end
+					end
+				else
+					hhLockedTarget[tower] = nil
+					Deadeye.HideAimLaser(tower)
+					Deadeye.UpdateCombatState(tower, false, nil)
+				end
 			end
 			tower:SetAttribute("State", "Idle")
 			continue
@@ -594,15 +678,27 @@ RunService.Heartbeat:Connect(function()
 			local isEnhanced = count >= Deadeye.ENHANCE_AFTER
 
 			if isEnhanced then
+				local torso2 = tower.PrimaryPart
+				local range  = tower:GetAttribute("RNG") or 30
+
+				-- Strike Skill: Dynamite takes priority over normal Headhunter targets.
+				local dynamite = Deadeye.GetDynamite(tower)
+				if dynamite and dynamite.Parent and dynamite.PrimaryPart and torso2 then
+					local dynDist = (dynamite.PrimaryPart.Position - torso2.Position).Magnitude
+					if dynDist <= range then
+						hhLockedTarget[tower] = dynamite
+					end
+				end
+
 				-- Lock onto the Headhunter target once and keep it until the shot fires.
 				-- Re-evaluate only if the locked target is dead/gone.
 				local locked = hhLockedTarget[tower]
-				if not locked or not locked.Parent or (locked:GetAttribute("HP") or 0) <= 0 then
+				if not locked or not locked.Parent or
+					(not locked:GetAttribute("IsDynamite") and (locked:GetAttribute("HP") or 0) <= 0)
+				then
 					locked = findHeadhunterTarget(tower, target)
 					hhLockedTarget[tower] = locked
 				end
-				
-				
 
 				-- Drive the animation state machine toward the LOCKED target so the
 				-- gun raises and faces the correct enemy during the full aim window.
@@ -620,10 +716,19 @@ RunService.Heartbeat:Connect(function()
 				end
 
 				-- Aim delay elapsed — fire!
+				local firedAtDynamite = locked and locked:GetAttribute("IsDynamite")
 				hhLockedTarget[tower] = nil
 				tower:SetAttribute("State", "Attacking")
 				data.lastAttackTime = now
-				Deadeye.DoAttack(tower, target, enemiesFolder)
+
+				if firedAtDynamite then
+					-- Shoot the dynamite → explosion
+					Deadeye.DoAttackDynamite(tower, locked)
+					triggerDynamiteExplosion(tower, locked)
+					Deadeye.RemoveDynamite(tower)
+				else
+					Deadeye.DoAttack(tower, target, enemiesFolder)
+				end
 
 			else
 				-- Normal Revolver shot — no aim VFX, no extra delay.
@@ -728,6 +833,29 @@ RunService.Heartbeat:Connect(function()
 			releaseAggro(tower)
 		end
 	end
+
+	-- === BURN DAMAGE TICK (from Dynamite fire) ===
+	for enemy, burnData in pairs(burnMap) do
+		if not enemy or not enemy.Parent or (enemy:GetAttribute("HP") or 0) <= 0 then
+			burnMap[enemy] = nil
+			continue
+		end
+		if now >= burnData.burnUntil then
+			burnMap[enemy] = nil
+			continue
+		end
+		if (now - burnData.lastTick) >= 1.0 then
+			local hp    = enemy:GetAttribute("HP") or 0
+			local newHP = hp - burnData.burnDPS
+			enemy:SetAttribute("HP", newHP)
+			burnData.lastTick = now
+			damageIndicatorRemote:FireAllClients(enemy.PrimaryPart and enemy.PrimaryPart.Position or Vector3.zero, burnData.burnDPS, "Normal")
+			if newHP <= 0 and enemy.Parent then
+				enemy:Destroy()
+				burnMap[enemy] = nil
+			end
+		end
+	end
 end)
 
 -- ============================================================
@@ -749,6 +877,7 @@ enemiesFolder.ChildRemoved:Connect(function(enemy)
 		activePushes[enemy]:Disconnect()
 		activePushes[enemy] = nil
 	end
+	burnMap[enemy] = nil
 end)
 
 -- ============================================================
@@ -785,6 +914,33 @@ moveRemote.OnServerEvent:Connect(function(player: Player, tower: Model, dest: Ve
 	if (tower:GetAttribute("State") or "Idle") == "Leaping" then return end
 
 	moveTower(tower, dest)
+end)
+
+-- ============================================================
+-- STRIKE SKILL REMOTE
+-- ============================================================
+
+strikeSkillRemote.OnServerEvent:Connect(function(player: Player, tower: Model, skillName: string, position)
+	if type(skillName) ~= "string"           then return end
+	if not tower or not tower:IsA("Model")   then return end
+	if tower.Parent ~= towersFolder          then return end
+	if (tower:GetAttribute("Owner") or "") ~= player.Name then return end
+
+	local towerType = tower:GetAttribute("TowerType")
+
+	if skillName == "Dynamite" and towerType == "Deadeye" then
+		if typeof(position) ~= "Vector3" then return end
+		local torso = tower.PrimaryPart
+		if not torso then return end
+		local flatDist = Vector3.new(position.X - torso.Position.X, 0, position.Z - torso.Position.Z).Magnitude
+		if flatDist > Deadeye.DYNAMITE_RANGE + 0.5 then return end  -- small tolerance
+		-- Snap to ground level
+		local snapPos = Vector3.new(position.X, torso.Position.Y - 2.3, position.Z)
+		Deadeye.PlaceDynamite(tower, snapPos)
+
+	elseif skillName == "NanoBlast" and towerType == "Vitalist" then
+		Vitalist.FireNanoBlast(tower, enemiesFolder, towersFolder)
+	end
 end)
 
 towersFolder.ChildRemoved:Connect(function(child)
