@@ -60,6 +60,9 @@ Deadeye.GUN_RAISE_DELAY        = 0.15   -- seconds after raise finishes before f
 Deadeye.GUN_LOWER_DELAY        = 3.0    -- seconds without a shot → lower gun
 Deadeye.BULLET_SPEED           = 180    -- studs / second
 Deadeye.HEADHUNTER_AIM_TIME    = 0.65   -- ← seconds Headhunter holds the laser before firing
+Deadeye.DYNAMITE_RANGE         = 8      -- max studs from tower where dynamite can be placed
+Deadeye.DYNAMITE_EXPLOSION_RADIUS = 10  -- AoE radius of the dynamite explosion
+Deadeye.DYNAMITE_BURN_DURATION = 3      -- seconds enemies burn after the explosion
 
 -- ====== ANIMATION IDs ======
 local IDLE_ANIM_ID     = "rbxassetid://130403916615858"
@@ -86,6 +89,7 @@ local bulletGuis = {}   -- tower → { billboard, labels[], usingImages }
 
 local headhunterAimStart = {}  -- tower → tick() when lock-on began
 local aimBeams           = {}  -- tower → aim-laser data
+local dynamiteModels     = {}  -- tower → dynamite Model (or nil)
 
 -- ============================================================
 -- INTERNAL HELPERS
@@ -1417,6 +1421,224 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 end
 
 -- ============================================================
+-- STRIKE SKILL – DYNAMITE
+-- ============================================================
+
+-- Creates and places a dynamite at the given world position.
+-- The dynamite is a visible Model that the Headhunter will auto-target.
+function Deadeye.PlaceDynamite(tower: Model, position: Vector3)
+	-- Remove any previous dynamite for this tower
+	Deadeye.RemoveDynamite(tower)
+
+	local model = Instance.new("Model")
+	model.Name  = "DynamiteBomb"
+	model:SetAttribute("IsDynamite",   true)
+	model:SetAttribute("DynamiteOwner", tower:GetFullName())
+
+	-- Main body (cylinder)
+	local body = Instance.new("Part")
+	body.Name         = "Body"
+	body.Shape        = Enum.PartType.Cylinder
+	body.Size         = Vector3.new(1.2, 0.6, 0.6)
+	body.Color        = Color3.fromRGB(200, 50, 30)
+	body.Material     = Enum.Material.SmoothPlastic
+	body.Anchored     = true
+	body.CanCollide   = false
+	body.CastShadow   = false
+	body.CFrame       = CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90))
+	body.Parent       = model
+	model.PrimaryPart = body
+
+	-- Fuse spark (point light to indicate it's live)
+	local light = Instance.new("PointLight")
+	light.Brightness = 2.0
+	light.Color      = Color3.fromRGB(255, 200, 50)
+	light.Range      = 6
+	light.Parent     = body
+
+	-- Fuse glow particle
+	local fatt = Instance.new("Attachment")
+	fatt.Position = Vector3.new(0.62, 0, 0)
+	fatt.Parent   = body
+
+	local spark = Instance.new("ParticleEmitter")
+	spark.Color       = ColorSequence.new({
+		ColorSequenceKeypoint.new(0,   Color3.fromRGB(255, 220, 60)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 120, 20)),
+		ColorSequenceKeypoint.new(1,   Color3.fromRGB(200, 50,  20)),
+	})
+	spark.Size        = NumberSequence.new(0.12)
+	spark.Lifetime    = NumberRange.new(0.05, 0.18)
+	spark.Speed       = NumberRange.new(2, 8)
+	spark.SpreadAngle = Vector2.new(60, 60)
+	spark.Rate        = 18
+	spark.LightEmission = 1
+	spark.Parent      = fatt
+
+	model.Parent = Workspace
+	dynamiteModels[tower] = model
+end
+
+function Deadeye.GetDynamite(tower: Model): Model?
+	local m = dynamiteModels[tower]
+	if m and m.Parent then return m end
+	dynamiteModels[tower] = nil
+	return nil
+end
+
+function Deadeye.RemoveDynamite(tower: Model)
+	local m = dynamiteModels[tower]
+	if m and m.Parent then
+		pcall(function() m:Destroy() end)
+	end
+	dynamiteModels[tower] = nil
+end
+
+-- VFX for the dynamite explosion.
+function Deadeye.SpawnExplosionVFX(position: Vector3)
+	local anchor = Instance.new("Part")
+	anchor.Name         = "DynamiteExplosionAnchor"
+	anchor.Size         = Vector3.new(0.1, 0.1, 0.1)
+	anchor.Transparency = 1
+	anchor.Anchored     = true
+	anchor.CanCollide   = false
+	anchor.Position     = position
+	anchor.Parent       = Workspace
+
+	local att = Instance.new("Attachment")
+	att.Parent = anchor
+
+	-- Fireball burst
+	local fire = Instance.new("ParticleEmitter")
+	fire.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0,   Color3.fromRGB(255, 240, 100)),
+		ColorSequenceKeypoint.new(0.3, Color3.fromRGB(255, 120, 20)),
+		ColorSequenceKeypoint.new(1,   Color3.fromRGB(100, 40,  10)),
+	})
+	fire.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0,   1.8),
+		NumberSequenceKeypoint.new(0.4, 0.9),
+		NumberSequenceKeypoint.new(1,   0),
+	})
+	fire.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	fire.Lifetime    = NumberRange.new(0.3, 0.7)
+	fire.Speed       = NumberRange.new(8, 22)
+	fire.SpreadAngle = Vector2.new(180, 180)
+	fire.LightEmission = 0.8
+	fire.Rate        = 0
+	fire.Parent      = att
+	fire:Emit(28)
+
+	-- Smoke column
+	local smoke = Instance.new("ParticleEmitter")
+	smoke.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0,   Color3.fromRGB(180, 130, 60)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(100,  80, 50)),
+		ColorSequenceKeypoint.new(1,   Color3.fromRGB(50,   40, 35)),
+	})
+	smoke.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0,   0.5),
+		NumberSequenceKeypoint.new(0.5, 1.8),
+		NumberSequenceKeypoint.new(1,   2.2),
+	})
+	smoke.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0,   0.2),
+		NumberSequenceKeypoint.new(0.5, 0.5),
+		NumberSequenceKeypoint.new(1,   1),
+	})
+	smoke.Lifetime      = NumberRange.new(0.6, 1.4)
+	smoke.Speed         = NumberRange.new(6, 14)
+	smoke.SpreadAngle   = Vector2.new(30, 30)
+	smoke.Acceleration  = Vector3.new(0, 10, 0)
+	smoke.Rate          = 0
+	smoke.Parent        = att
+	smoke:Emit(12)
+
+	-- Shockwave ring
+	local ring = Instance.new("Part")
+	ring.Name         = "ExplosionRing"
+	ring.Shape        = Enum.PartType.Cylinder
+	ring.Size         = Vector3.new(0.12, 0.8, 0.8)
+	ring.Color        = Color3.fromRGB(255, 180, 50)
+	ring.Material     = Enum.Material.Neon
+	ring.Transparency = 0.15
+	ring.Anchored     = true
+	ring.CanCollide   = false
+	ring.CastShadow   = false
+	ring.CFrame       = CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90))
+	ring.Parent       = Workspace
+	TweenService:Create(ring,
+		TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ Size = Vector3.new(0.05, Deadeye.DYNAMITE_EXPLOSION_RADIUS * 2.2, Deadeye.DYNAMITE_EXPLOSION_RADIUS * 2.2), Transparency = 1 }
+	):Play()
+
+	-- Point light flash
+	local light = Instance.new("PointLight")
+	light.Brightness = 6
+	light.Color      = Color3.fromRGB(255, 180, 60)
+	light.Range      = 20
+	light.Parent     = anchor
+	TweenService:Create(light, TweenInfo.new(0.6), { Brightness = 0 }):Play()
+
+	task.delay(1.2, function()
+		if anchor and anchor.Parent then anchor:Destroy() end
+		if ring   and ring.Parent   then ring:Destroy()   end
+	end)
+end
+
+-- Animate the Deadeye firing at the dynamite (enhanced shot visuals + reload).
+-- Called by TowerManager just before triggering the explosion.
+function Deadeye.DoAttackDynamite(tower: Model, dynamiteModel: Model)
+	local st = getAnimState(tower)
+
+	local torso = tower.PrimaryPart
+	if torso and dynamiteModel.PrimaryPart then
+		local flatDir = Vector3.new(
+			dynamiteModel.PrimaryPart.Position.X - torso.Position.X,
+			0,
+			dynamiteModel.PrimaryPart.Position.Z - torso.Position.Z
+		)
+		if flatDir.Magnitude > 0.1 then
+			torso.CFrame = CFrame.new(torso.Position, torso.Position + flatDir.Unit)
+		end
+	end
+
+	local impactPos = dynamiteModel.PrimaryPart and dynamiteModel.PrimaryPart.Position or Vector3.zero
+
+	-- Reset bullet count (same as a Headhunter shot)
+	tower:SetAttribute("BasicAttackCount", 0)
+	Deadeye.UpdateBulletDisplay(tower, 3, false)
+
+	if torso then
+		local barrel  = tower:FindFirstChild("GunBarrel", true)
+		local fromPos = barrel and barrel.WorldPosition or torso.Position
+		Deadeye.SpawnBarrelFlash(fromPos, true)
+		Deadeye.SpawnBullet(fromPos, impactPos, true)
+	end
+
+	playShootBrief(tower, st)
+	st.lastShotTime = tick()
+
+	task.spawn(function()
+		if st.shootTrack then
+			if st.shootTrack.IsPlaying then
+				st.shootTrack.Stopped:Wait()
+			else
+				task.wait(0.25)
+			end
+		else
+			task.wait(0.25)
+		end
+		if tower and tower.Parent and not st.reloading then
+			triggerReload(tower, st)
+		end
+	end)
+end
+
+-- ============================================================
 -- CLEANUP
 -- ============================================================
 
@@ -1448,6 +1670,7 @@ function Deadeye.CleanupTower(tower: Model)
 
 	Deadeye.HideAimLaser(tower)
 	headhunterAimStart[tower] = nil
+	Deadeye.RemoveDynamite(tower)
 end
 
 return Deadeye
