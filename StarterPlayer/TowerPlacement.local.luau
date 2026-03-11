@@ -234,7 +234,7 @@ end
 local function getTowerFromPart(part: Instance): Model?
 	if not part then return nil end
 	local current = part
-	while current and current ~= Workspace do
+	while current and current ~= workspace do
 		if current.Parent == towersFolder then return current :: Model end
 		current = current.Parent
 	end

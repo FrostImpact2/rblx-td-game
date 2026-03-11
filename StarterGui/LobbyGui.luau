@@ -7,9 +7,9 @@ Implements all three main out-of-round GUIs:
   • QUESTS     – daily / weekly / challenge quest tabs
   • GACHA      – standard and special banner pull system
 
-Floating 3D-perspective panel design with a segmented top bar,
-grid-based tile layout, and camera manipulation.  An arrow
-button at the bottom of the screen toggles the panel open/closed.
+Clean white card-based layout with bold navigation bar,
+matching the reference image style. High-resolution text
+and generous spacing for readability.
 ]]
 
 local Players           = game:GetService("Players")
@@ -23,7 +23,7 @@ local playerGui = player:WaitForChild("PlayerGui")
 local TowerData = require(ReplicatedStorage:WaitForChild("TowerData", 30))
 
 -- ============================================================
--- REMOTES  (wait for CurrencyManager / GameStateManager to create them)
+-- REMOTES
 -- ============================================================
 
 local updateCurrencyRemote = ReplicatedStorage:WaitForChild("UpdateCurrency",    30)
@@ -40,8 +40,7 @@ local gameStateValue       = ReplicatedStorage:WaitForChild("GameState",        
 local localCoins      = 0
 local localGems       = 0
 local activeBanner    = "standard"
-local activePanel     = nil   -- "home" | "inventory" | "quests" | "gacha" | nil
-
+local activePanel     = nil
 local unlockedTowers  = { Warrior = true }
 local ownedEquipment  = {}
 local selectedTower   = nil
@@ -49,36 +48,58 @@ local activeQuestTab  = "Daily"
 local panelOpen       = false
 
 -- ============================================================
--- COLOUR PALETTE  (flat light-theme matching reference image)
+-- COLOUR PALETTE  (matches reference: crisp white, bold accents)
 -- ============================================================
 
 local C = {
-	BG        = Color3.fromRGB(235, 237, 245),
-	PANEL     = Color3.fromRGB(255, 255, 255),
-	PANEL2    = Color3.fromRGB(242, 243, 250),
-	BORDER    = Color3.fromRGB(200, 205, 218),
-	ACCENT    = Color3.fromRGB(255, 90, 120),
-	ACCENT2   = Color3.fromRGB(80, 140, 255),
-	GREEN     = Color3.fromRGB(60,  200, 100),
-	RED       = Color3.fromRGB(220, 70,  70),
-	GOLD      = Color3.fromRGB(255, 185, 40),
-	GEM       = Color3.fromRGB(140, 80,  255),
-	TEXT      = Color3.fromRGB(35,  38,  52),
-	TEXTSUB   = Color3.fromRGB(100, 105, 125),
-	TEXTDIM   = Color3.fromRGB(155, 160, 178),
-	WHITE     = Color3.fromRGB(255, 255, 255),
-	BLACK     = Color3.fromRGB(0,   0,   0),
-	TAB_BG    = Color3.fromRGB(42,  44,  58),
-	PINK_L    = Color3.fromRGB(255, 180, 180),
-	PINK_R    = Color3.fromRGB(255, 120, 130),
-	TILE_BG   = Color3.fromRGB(245, 246, 252),
+	-- Grayscale hierarchy (light → dark, no pure white anywhere)
+	-- G1 is the lightest "almost white" used for main panels
+	-- G5 is the darkest used for the nav bar / dark tiles
+	G1          = Color3.fromRGB(238, 239, 244),   -- lightest: main panel face
+	G2          = Color3.fromRGB(224, 226, 234),   -- card surfaces, nav bar
+	G3          = Color3.fromRGB(210, 212, 223),   -- secondary boxes, pill bg
+	G4          = Color3.fromRGB(192, 195, 210),   -- input/desc boxes, progress bg
+	G5          = Color3.fromRGB(168, 172, 192),   -- darker elements, claim btn
+	G6          = Color3.fromRGB(130, 135, 158),   -- deepest gray surface
+
+	-- Aliases (used throughout code for semantic clarity)
+	BG          = Color3.fromRGB(210, 212, 223),   -- page background = G3
+	PANEL       = Color3.fromRGB(238, 239, 244),   -- main card face = G1
+	PANEL2      = Color3.fromRGB(224, 226, 234),   -- secondary card = G2
+	GRAY        = Color3.fromRGB(210, 212, 223),   -- boxes/inputs = G3
+	GRAY_DARK   = Color3.fromRGB(192, 195, 210),   -- darker gray boxes = G4
+	STATUS_BG   = Color3.fromRGB(210, 212, 223),   -- currency pill bg = G3
+
+	-- Borders & dividers
+	BORDER      = Color3.fromRGB(185, 188, 205),
+	DIVIDER     = Color3.fromRGB(200, 203, 216),
+
+	-- Accents (kept vivid so they pop against the gray scale)
+	ACCENT      = Color3.fromRGB(255, 88, 100),    -- coral/red
+	ACCENT2     = Color3.fromRGB(80, 140, 255),    -- blue
+	GREEN       = Color3.fromRGB(52, 199, 105),
+	RED         = Color3.fromRGB(220, 60, 70),
+	GOLD        = Color3.fromRGB(235, 165, 20),
+	GEM         = Color3.fromRGB(130, 80, 255),
+	ORANGE      = Color3.fromRGB(255, 140, 60),
+
+	-- Text (dark on light gray reads well)
+	TEXT        = Color3.fromRGB(28, 30, 42),
+	TEXTSUB     = Color3.fromRGB(78, 82, 108),
+	TEXTDIM     = Color3.fromRGB(140, 144, 168),
+	WHITE       = Color3.fromRGB(245, 246, 250),   -- "white" text = very light gray
+	BLACK       = Color3.fromRGB(0,   0,   0),
+
+	-- Tile colours
+	TILE_WHITE  = Color3.fromRGB(238, 239, 244),   -- G1 instead of pure white
+	TILE_CORAL  = Color3.fromRGB(255, 160, 130),
+	TILE_PEACH  = Color3.fromRGB(255, 200, 170),
+	TILE_DARK   = Color3.fromRGB(48,  50,  66),    -- dark tile
+	TILE_BLUE   = Color3.fromRGB(210, 222, 245),
 }
 
--- Perspective rotation applied to the whole panel for a 3D floating feel
-local PANEL_ROTATION = -2
+local PANEL_ROTATION = -1.5
 
--- Camera cinematic angle offsets – positioned to the side so the
--- character is visible next to the tilted GUI panel.
 local CAMERA_OFFSET        = Vector3.new(6, 4, 10)
 local CAMERA_LOOKAT_OFFSET = Vector3.new(0, 2, 0)
 
@@ -99,7 +120,7 @@ screenGui.Parent             = playerGui
 
 local function makeCorner(parent, radius)
 	local c = Instance.new("UICorner")
-	c.CornerRadius = UDim.new(0, radius or 6)
+	c.CornerRadius = UDim.new(0, radius or 8)
 	c.Parent = parent
 end
 
@@ -112,18 +133,34 @@ local function makeStroke(parent, color, thickness, trans)
 	return s
 end
 
+local function makeShadow(parent)
+	-- Simulate a soft drop shadow using a slightly larger dark frame behind
+	local shadow = Instance.new("Frame")
+	shadow.Name = "Shadow"
+	shadow.Size = UDim2.new(1, 8, 1, 8)
+	shadow.Position = UDim2.new(0, -4, 0, 4)
+	shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	shadow.BackgroundTransparency = 0.88
+	shadow.BorderSizePixel = 0
+	shadow.ZIndex = parent.ZIndex - 1
+	shadow.Parent = parent.Parent
+	makeCorner(shadow, 12)
+	shadow.Parent = parent
+	return shadow
+end
+
 local function makeLabel(parent, text, size, pos, textColor, bgColor, bgTrans)
 	local f = Instance.new("TextLabel")
 	f.Size = size
 	f.Position = pos or UDim2.new(0,0,0,0)
-	f.BackgroundColor3 = bgColor or C.PANEL
+	f.BackgroundColor3 = bgColor or C.G1
 	f.BackgroundTransparency = bgTrans ~= nil and bgTrans or 1
 	f.BorderSizePixel = 0
 	f.Text = text
 	f.TextColor3 = textColor or C.TEXT
 	f.Font = Enum.Font.GothamBold
 	f.TextScaled = false
-	f.TextSize = 13
+	f.TextSize = 17          -- high-res readable size
 	f.TextXAlignment = Enum.TextXAlignment.Left
 	f.Parent = parent
 	return f
@@ -138,7 +175,7 @@ local function makeButton(parent, text, size, pos, bg, textColor)
 	b.Text = text
 	b.TextColor3 = textColor or C.WHITE
 	b.Font = Enum.Font.GothamBold
-	b.TextSize = 13
+	b.TextSize = 17
 	b.AutoButtonColor = true
 	b.Parent = parent
 	return b
@@ -151,8 +188,8 @@ local function makeDivider(parent, horizontal)
 	else
 		d.Size = UDim2.new(0, 1, 1, 0)
 	end
-	d.BackgroundColor3 = C.BORDER
-	d.BackgroundTransparency = 0.3
+	d.BackgroundColor3 = C.DIVIDER
+	d.BackgroundTransparency = 0
 	d.BorderSizePixel = 0
 	d.Parent = parent
 	return d
@@ -170,137 +207,122 @@ local function rarityStars(rarityKey: string): string
 end
 
 -- ============================================================
--- MAIN FLOATING PANEL  (centred with perspective rotation)
+-- MAIN FLOATING PANEL
 -- ============================================================
 
-local PANEL_W = 0.88          -- fraction of screen width
-local PANEL_H = 0.72          -- fraction of screen height
+local PANEL_W = 0.90
+local PANEL_H = 0.76
 
 local mainPanel              = Instance.new("Frame")
 mainPanel.Name               = "MainPanel"
 mainPanel.Size               = UDim2.new(PANEL_W, 0, PANEL_H, 0)
 mainPanel.AnchorPoint        = Vector2.new(0.5, 0.5)
-mainPanel.Position           = UDim2.new(0.5, 0, 1.5, 0)   -- starts off-screen below
+mainPanel.Position           = UDim2.new(0.5, 0, 1.5, 0)
 mainPanel.BackgroundColor3   = C.BG
-mainPanel.BackgroundTransparency = 0.02
+mainPanel.BackgroundTransparency = 0
 mainPanel.BorderSizePixel    = 0
 mainPanel.ClipsDescendants   = true
 mainPanel.Rotation           = PANEL_ROTATION
 mainPanel.ZIndex             = 5
 mainPanel.Parent             = screenGui
-makeCorner(mainPanel, 8)
-makeStroke(mainPanel, C.BORDER, 1, 0.25)
-
--- Subtle depth gradient (left brighter → right slightly darker)
-local depthGrad              = Instance.new("UIGradient")
-depthGrad.Color              = ColorSequence.new(
-	Color3.fromRGB(255, 255, 255),
-	Color3.fromRGB(235, 235, 240)
-)
-depthGrad.Rotation           = 0
-depthGrad.Parent             = mainPanel
+makeCorner(mainPanel, 10)
+makeStroke(mainPanel, C.BORDER, 1, 0)
 
 -- ============================================================
--- TAB BAR  (wide dark header with segmented tabs + status area)
+-- NAV BAR  (white bar, bold segmented tabs like reference image)
 -- ============================================================
 
-local TAB_BAR_HEIGHT = 44
+local NAV_HEIGHT = 60
 
-local tabBar              = Instance.new("Frame")
-tabBar.Name               = "TabBar"
-tabBar.Size               = UDim2.new(1, 0, 0, TAB_BAR_HEIGHT)
-tabBar.Position           = UDim2.new(0, 0, 0, 0)
-tabBar.BackgroundColor3   = C.TAB_BG
-tabBar.BorderSizePixel    = 0
-tabBar.ClipsDescendants   = true
-tabBar.ZIndex             = 10
-tabBar.Parent             = mainPanel
+local navBar              = Instance.new("Frame")
+navBar.Name               = "NavBar"
+navBar.Size               = UDim2.new(1, 0, 0, NAV_HEIGHT)
+navBar.Position           = UDim2.new(0, 0, 0, 0)
+navBar.BackgroundColor3   = C.G2
+navBar.BorderSizePixel    = 0
+navBar.ZIndex             = 10
+navBar.Parent             = mainPanel
 
--- ── Status / currency area (right side of tab bar) ──────────
-local currencyArea        = Instance.new("Frame")
-currencyArea.Size         = UDim2.new(0, 340, 0, 32)
-currencyArea.Position     = UDim2.new(1, -350, 0.5, -16)
-currencyArea.BackgroundTransparency = 1
-currencyArea.BorderSizePixel = 0
-currencyArea.ZIndex       = 12
-currencyArea.Parent       = tabBar
+-- Bottom border on nav bar
+local navBorder = makeDivider(navBar, true)
+navBorder.Position = UDim2.new(0, 0, 1, -1)
+navBorder.BackgroundColor3 = C.BORDER
+navBorder.BackgroundTransparency = 0
 
--- Level indicator
-local lvlFrame            = Instance.new("Frame")
-lvlFrame.Size             = UDim2.new(0, 50, 0, 28)
-lvlFrame.Position         = UDim2.new(0, 0, 0.5, -14)
-lvlFrame.BackgroundColor3 = Color3.fromRGB(60, 62, 78)
-lvlFrame.BorderSizePixel  = 0
-lvlFrame.ZIndex           = 13
-lvlFrame.Parent           = currencyArea
-makeCorner(lvlFrame, 4)
+-- ── Currency / status area (right side) ─────────────────────
 
-local lvlLabel = makeLabel(lvlFrame, "Lv 1",
-	UDim2.new(1, 0, 1, 0), UDim2.new(0, 0, 0, 0),
+local statusArea        = Instance.new("Frame")
+statusArea.Size         = UDim2.new(0, 420, 0, 42)
+statusArea.Position     = UDim2.new(1, -432, 0.5, -21)
+statusArea.BackgroundTransparency = 1
+statusArea.BorderSizePixel = 0
+statusArea.ZIndex       = 12
+statusArea.Parent       = navBar
+
+-- Helper: pill-shaped currency display
+local function makeCurrencyPill(parent, xOffset, width, icon, color)
+	local pill = Instance.new("Frame")
+	pill.Size = UDim2.new(0, width, 0, 38)
+	pill.Position = UDim2.new(0, xOffset, 0.5, -19)
+	pill.BackgroundColor3 = C.GRAY
+	pill.BorderSizePixel = 0
+	pill.ZIndex = 13
+	pill.Parent = parent
+	makeCorner(pill, 7)
+	makeStroke(pill, C.BORDER, 1, 0)
+
+	local iconL = makeLabel(pill, icon,
+		UDim2.new(0, 30, 1, 0), UDim2.new(0, 5, 0, 0),
+		color, nil, 1)
+	iconL.TextSize = 18
+	iconL.TextXAlignment = Enum.TextXAlignment.Center
+	iconL.ZIndex = 14
+
+	local valL = makeLabel(pill, "0",
+		UDim2.new(1, -38, 1, 0), UDim2.new(0, 36, 0, 0),
+		C.TEXT, nil, 1)
+	valL.Name = "Value"
+	valL.TextSize = 16
+	valL.Font = Enum.Font.GothamBold
+	valL.TextXAlignment = Enum.TextXAlignment.Left
+	valL.ZIndex = 14
+
+	return valL
+end
+
+-- Level pill
+local lvlPill = Instance.new("Frame")
+lvlPill.Size = UDim2.new(0, 64, 0, 38)
+lvlPill.Position = UDim2.new(0, 0, 0.5, -19)
+lvlPill.BackgroundColor3 = C.ACCENT
+lvlPill.BorderSizePixel = 0
+lvlPill.ZIndex = 13
+lvlPill.Parent = statusArea
+makeCorner(lvlPill, 7)
+
+local lvlLabel = makeLabel(lvlPill, "Lv 1",
+	UDim2.new(1, 0, 1, 0), UDim2.new(0,0,0,0),
 	C.WHITE, nil, 1)
-lvlLabel.TextSize = 11
+lvlLabel.TextSize = 15
 lvlLabel.TextXAlignment = Enum.TextXAlignment.Center
 lvlLabel.ZIndex = 14
 
--- Coins
-local coinsFrame          = Instance.new("Frame")
-coinsFrame.Size           = UDim2.new(0, 100, 0, 28)
-coinsFrame.Position       = UDim2.new(0, 58, 0.5, -14)
-coinsFrame.BackgroundColor3 = Color3.fromRGB(60, 62, 78)
-coinsFrame.BorderSizePixel = 0
-coinsFrame.ZIndex         = 13
-coinsFrame.Parent         = currencyArea
-makeCorner(coinsFrame, 4)
+local coinsLabel = makeCurrencyPill(statusArea, 72,  124, "🪙", C.GOLD)
+coinsLabel.Text = "1,000"
+local gemsLabel  = makeCurrencyPill(statusArea, 204, 104,  "💎", C.GEM)
+gemsLabel.Text = "50"
 
-local coinsIcon = makeLabel(coinsFrame, "🪙",
-	UDim2.new(0, 22, 1, 0), UDim2.new(0, 4, 0, 0),
-	C.GOLD, nil, 1)
-coinsIcon.TextSize = 13
-coinsIcon.TextXAlignment = Enum.TextXAlignment.Center
-coinsIcon.ZIndex = 14
-
-local coinsLabel = makeLabel(coinsFrame, "1,000",
-	UDim2.new(1, -28, 1, 0), UDim2.new(0, 26, 0, 0),
-	C.GOLD, nil, 1)
-coinsLabel.TextSize = 12
-coinsLabel.Font = Enum.Font.GothamBold
-coinsLabel.ZIndex = 14
-
--- Gems
-local gemsFrame           = Instance.new("Frame")
-gemsFrame.Size            = UDim2.new(0, 80, 0, 28)
-gemsFrame.Position        = UDim2.new(0, 166, 0.5, -14)
-gemsFrame.BackgroundColor3 = Color3.fromRGB(60, 62, 78)
-gemsFrame.BorderSizePixel = 0
-gemsFrame.ZIndex          = 13
-gemsFrame.Parent          = currencyArea
-makeCorner(gemsFrame, 4)
-
-local gemsIcon = makeLabel(gemsFrame, "💎",
-	UDim2.new(0, 22, 1, 0), UDim2.new(0, 4, 0, 0),
-	C.GEM, nil, 1)
-gemsIcon.TextSize = 13
-gemsIcon.TextXAlignment = Enum.TextXAlignment.Center
-gemsIcon.ZIndex = 14
-
-local gemsLabel = makeLabel(gemsFrame, "50",
-	UDim2.new(1, -28, 1, 0), UDim2.new(0, 26, 0, 0),
-	C.GEM, nil, 1)
-gemsLabel.TextSize = 12
-gemsLabel.Font = Enum.Font.GothamBold
-gemsLabel.ZIndex = 14
-
--- Start / Stop button
-local toggleBtn = makeButton(tabBar, "▶ START",
-	UDim2.new(0, 84, 0, 28),
-	UDim2.new(1, -94, 0.5, -14),
+-- START / STOP toggle button (right-most, coral accent)
+local toggleBtn = makeButton(navBar, "▶ START",
+	UDim2.new(0, 108, 0, 40),
+	UDim2.new(1, -120, 0.5, -20),
 	C.GREEN, C.WHITE)
-makeCorner(toggleBtn, 4)
-toggleBtn.TextSize = 11
+makeCorner(toggleBtn, 7)
+toggleBtn.TextSize = 15
 toggleBtn.ZIndex = 13
 
 -- ============================================================
--- SEGMENTED TAB BUTTONS  (flat rectangular segments with thin dividers)
+-- SEGMENTED NAVIGATION TABS  (match reference image style)
 -- ============================================================
 
 local tabButtons = {}
@@ -311,20 +333,23 @@ local TAB_DEFS = {
 	{ key = "gacha",     label = "GACHA",     order = 3 },
 }
 
-local TAB_WIDTH = 130
-local TAB_START_X = 0
+-- Tabs live on the LEFT side of the nav bar, bold text style
+local TAB_WIDTH  = 160
+local TAB_STARTX = 0
 
 for i, def in ipairs(TAB_DEFS) do
+	local xPos = TAB_STARTX + (i - 1) * TAB_WIDTH
+
 	local tabContainer              = Instance.new("Frame")
 	tabContainer.Name               = "Tab_" .. def.key
 	tabContainer.Size               = UDim2.new(0, TAB_WIDTH, 1, 0)
-	tabContainer.Position           = UDim2.new(0, TAB_START_X + (i - 1) * TAB_WIDTH, 0, 0)
-	tabContainer.BackgroundColor3   = C.TAB_BG
-	tabContainer.BackgroundTransparency = 0.4
+	tabContainer.Position           = UDim2.new(0, xPos, 0, 0)
+	tabContainer.BackgroundColor3   = C.G1
+	tabContainer.BackgroundTransparency = 1
 	tabContainer.ClipsDescendants   = true
 	tabContainer.BorderSizePixel    = 0
 	tabContainer.ZIndex             = 11
-	tabContainer.Parent             = tabBar
+	tabContainer.Parent             = navBar
 
 	local tabBtn              = Instance.new("TextButton")
 	tabBtn.Name               = "Button"
@@ -337,52 +362,56 @@ for i, def in ipairs(TAB_DEFS) do
 	tabBtn.Parent             = tabContainer
 
 	local tabLabel            = Instance.new("TextLabel")
-	tabLabel.Size             = UDim2.new(1, 0, 1, 0)
+	tabLabel.Size             = UDim2.new(1, 0, 1, -4)
+	tabLabel.Position         = UDim2.new(0, 0, 0, 2)
 	tabLabel.BackgroundTransparency = 1
 	tabLabel.Text             = def.label
-	tabLabel.TextColor3       = Color3.fromRGB(180, 182, 195)
+	tabLabel.TextColor3       = C.TEXTSUB
 	tabLabel.Font             = Enum.Font.GothamBold
-	tabLabel.TextSize         = 13
+	tabLabel.TextSize         = 17
 	tabLabel.ZIndex           = 13
 	tabLabel.Parent           = tabContainer
 
-	local activeIndicator              = Instance.new("Frame")
-	activeIndicator.Name               = "ActiveIndicator"
-	activeIndicator.Size               = UDim2.new(1, 0, 0, 3)
-	activeIndicator.Position           = UDim2.new(0, 0, 1, -3)
-	activeIndicator.BackgroundColor3   = C.ACCENT
-	activeIndicator.BorderSizePixel    = 0
-	activeIndicator.Visible            = false
-	activeIndicator.ZIndex             = 15
-	activeIndicator.Parent             = tabContainer
+	-- Bold bottom accent line (like reference image active tab indicator)
+	local activeBar              = Instance.new("Frame")
+	activeBar.Name               = "ActiveBar"
+	activeBar.Size               = UDim2.new(0.7, 0, 0, 4)
+	activeBar.AnchorPoint        = Vector2.new(0.5, 1)
+	activeBar.Position           = UDim2.new(0.5, 0, 1, 0)
+	activeBar.BackgroundColor3   = C.ACCENT
+	activeBar.BorderSizePixel    = 0
+	activeBar.Visible            = false
+	activeBar.ZIndex             = 15
+	activeBar.Parent             = tabContainer
+	makeCorner(activeBar, 2)
 
-	-- Thin vertical divider between tabs
+	-- Thin right-side divider between tabs
 	if i < #TAB_DEFS then
-		local div            = Instance.new("Frame")
-		div.Size             = UDim2.new(0, 1, 0.5, 0)
-		div.Position         = UDim2.new(1, 0, 0.25, 0)
-		div.BackgroundColor3 = Color3.fromRGB(70, 72, 88)
-		div.BorderSizePixel  = 0
-		div.ZIndex           = 12
-		div.Parent           = tabContainer
+		local vdiv            = Instance.new("Frame")
+		vdiv.Size             = UDim2.new(0, 1, 0.45, 0)
+		vdiv.Position         = UDim2.new(1, 0, 0.275, 0)
+		vdiv.BackgroundColor3 = C.BORDER
+		vdiv.BorderSizePixel  = 0
+		vdiv.ZIndex           = 12
+		vdiv.Parent           = tabContainer
 	end
 
 	tabButtons[def.key] = {
 		container = tabContainer,
 		button    = tabBtn,
 		label     = tabLabel,
-		indicator = activeIndicator,
+		indicator = activeBar,
 	}
 end
 
 -- ============================================================
--- CONTENT AREA  (below the tab bar)
+-- CONTENT AREA
 -- ============================================================
 
 local contentArea              = Instance.new("Frame")
 contentArea.Name               = "ContentArea"
-contentArea.Size               = UDim2.new(1, 0, 1, -TAB_BAR_HEIGHT)
-contentArea.Position           = UDim2.new(0, 0, 0, TAB_BAR_HEIGHT)
+contentArea.Size               = UDim2.new(1, 0, 1, -NAV_HEIGHT)
+contentArea.Position           = UDim2.new(0, 0, 0, NAV_HEIGHT)
 contentArea.BackgroundColor3   = C.BG
 contentArea.BackgroundTransparency = 0
 contentArea.BorderSizePixel    = 0
@@ -391,29 +420,30 @@ contentArea.ZIndex             = 5
 contentArea.Parent             = mainPanel
 
 -- ============================================================
--- ARROW TOGGLE BUTTON
+-- ARROW TOGGLE BUTTON  (clean pill style)
 -- ============================================================
 
 local arrowBtn              = Instance.new("TextButton")
 arrowBtn.Name               = "ArrowToggle"
-arrowBtn.Size               = UDim2.new(0, 60, 0, 30)
-arrowBtn.Position           = UDim2.new(0.5, -30, 1, -36)
-arrowBtn.BackgroundColor3   = C.TAB_BG
+arrowBtn.Size               = UDim2.new(0, 72, 0, 32)
+arrowBtn.Position           = UDim2.new(0.5, -36, 1, -40)
+arrowBtn.BackgroundColor3   = C.G2
 arrowBtn.BorderSizePixel    = 0
 arrowBtn.Text               = "▲"
-arrowBtn.TextColor3         = C.WHITE
+arrowBtn.TextColor3         = C.TEXT
 arrowBtn.Font               = Enum.Font.GothamBold
-arrowBtn.TextSize           = 18
+arrowBtn.TextSize           = 20
 arrowBtn.AutoButtonColor    = true
 arrowBtn.ZIndex             = 30
 arrowBtn.Parent             = screenGui
-makeCorner(arrowBtn, 8)
+makeCorner(arrowBtn, 10)
+makeStroke(arrowBtn, C.BORDER, 1, 0)
 
 -- ============================================================
--- HOME GRID PANEL  (default view – 5 card tiles like reference image)
+-- HOME GRID PANEL  (card tiles matching reference image layout)
 -- ============================================================
 
-local GRID_PAD = 10
+local GRID_PAD = 12
 
 local homePanel              = Instance.new("Frame")
 homePanel.Name               = "HomePanel"
@@ -424,99 +454,138 @@ homePanel.Visible            = false
 homePanel.ZIndex             = 6
 homePanel.Parent             = contentArea
 
--- Helper: create a clickable grid tile
-local function makeTile(parent, size, pos, bgColor, title, subtitle, zIdx)
+local function makeTile(parent, size, pos, bgColor, title, subtitle, accentColor, zIdx)
 	local tile              = Instance.new("Frame")
 	tile.Size               = size
 	tile.Position           = pos
-	tile.BackgroundColor3   = bgColor or C.TILE_BG
+	tile.BackgroundColor3   = bgColor or C.TILE_WHITE
 	tile.BorderSizePixel    = 0
 	tile.ZIndex             = zIdx or 7
 	tile.Parent             = parent
-	makeCorner(tile, 6)
-	makeStroke(tile, C.BORDER, 1, 0.35)
+	makeCorner(tile, 10)
+	makeStroke(tile, C.BORDER, 1, 0)
+
+	-- Top-left accent stripe (like reference image colored left edge)
+	if accentColor then
+		local stripe = Instance.new("Frame")
+		stripe.Size = UDim2.new(0, 4, 1, 0)
+		stripe.BackgroundColor3 = accentColor
+		stripe.BorderSizePixel = 0
+		stripe.ZIndex = (zIdx or 7) + 1
+		stripe.Parent = tile
+		makeCorner(stripe, 3)
+	end
+
+	local titleOffset = accentColor and 14 or 10
 
 	local titleL = makeLabel(tile, title or "",
-		UDim2.new(1, -16, 0, 22),
-		UDim2.new(0, 10, 0, 10),
+		UDim2.new(1, -(titleOffset + 10), 0, 30),
+		UDim2.new(0, titleOffset, 0, 14),
 		C.TEXT, nil, 1)
-	titleL.TextSize = 14
-	titleL.ZIndex = (zIdx or 7) + 1
+	titleL.TextSize = 20
+	titleL.Font = Enum.Font.GothamBold
+	titleL.ZIndex = (zIdx or 7) + 2
 
 	if subtitle then
 		local subL = makeLabel(tile, subtitle,
-			UDim2.new(1, -16, 0, 16),
-			UDim2.new(0, 10, 0, 34),
+			UDim2.new(1, -(titleOffset + 10), 0, 22),
+			UDim2.new(0, titleOffset, 0, 46),
 			C.TEXTSUB, nil, 1)
-		subL.TextSize = 11
+		subL.TextSize = 14
 		subL.Font = Enum.Font.Gotham
 		subL.TextWrapped = true
-		subL.ZIndex = (zIdx or 7) + 1
+		subL.ZIndex = (zIdx or 7) + 2
 	end
 
 	local btn              = Instance.new("TextButton")
 	btn.Size               = UDim2.new(1, 0, 1, 0)
 	btn.BackgroundTransparency = 1
 	btn.Text               = ""
-	btn.ZIndex             = (zIdx or 7) + 2
+	btn.ZIndex             = (zIdx or 7) + 3
 	btn.Parent             = tile
 
 	return tile, btn
 end
 
--- ── Top row: two wide tiles ─────────────────────────────────
-
--- Left tile (Inventory) – pale gray, ~55 % width
+-- Top row: two tiles
 local invTile, invTileBtn = makeTile(homePanel,
-	UDim2.new(0.55, -GRID_PAD * 0.75, 0.52, -GRID_PAD * 0.75),
+	UDim2.new(0.55, -GRID_PAD, 0.50, -GRID_PAD * 0.5),
 	UDim2.new(0, GRID_PAD, 0, GRID_PAD),
-	C.TILE_BG,
+	C.TILE_WHITE,
 	"INVENTORY",
-	"Browse towers, view stats & equipment")
+	"Browse towers, view stats & equipment",
+	C.ACCENT2, 7)
 
--- Right tile (Gacha) – soft pink gradient, ~45 % width
+-- Coral/gradient right tile (LIMITED TIME OFFERS — matches reference)
 local gachaTile, gachaTileBtn = makeTile(homePanel,
-	UDim2.new(0.45, -GRID_PAD * 1.25, 0.52, -GRID_PAD * 0.75),
-	UDim2.new(0.55, GRID_PAD * 0.25, 0, GRID_PAD),
-	C.PINK_L,
+	UDim2.new(0.45, -GRID_PAD, 0.50, -GRID_PAD * 0.5),
+	UDim2.new(0.55, 0, 0, GRID_PAD),
+	C.TILE_CORAL,
 	"LIMITED TIME OFFERS!",
-	"Summon new towers – Special banner active")
+	"Summon new towers – Special banner active",
+	nil, 7)
 
--- Apply pink gradient on the gacha tile
-local gachaGrad              = Instance.new("UIGradient")
-gachaGrad.Color              = ColorSequence.new(C.PINK_L, C.PINK_R)
-gachaGrad.Rotation           = 0
-gachaGrad.Parent             = gachaTile
+local gachaGrad = Instance.new("UIGradient")
+gachaGrad.Color = ColorSequence.new(C.TILE_PEACH, C.TILE_CORAL)
+gachaGrad.Rotation = 135
+gachaGrad.Parent = gachaTile
 
--- ── Bottom row: three equal tiles ───────────────────────────
+-- Sale badge on the gacha tile (reference image has "SUMMER SALE!" badge)
+local saleBadge = Instance.new("Frame")
+saleBadge.Size = UDim2.new(0, 120, 0, 24)
+saleBadge.Position = UDim2.new(0, 10, 0, 66)
+saleBadge.BackgroundColor3 = C.ACCENT
+saleBadge.BorderSizePixel = 0
+saleBadge.ZIndex = 10
+saleBadge.Parent = gachaTile
+makeCorner(saleBadge, 4)
 
-local bottomY  = UDim.new(0.52, GRID_PAD * 0.25)
-local bottomH  = UDim.new(0.48, -GRID_PAD * 1.25)
-local tileW    = UDim.new(1/3, -GRID_PAD * 1.1)
+local saleLbl = makeLabel(saleBadge, "SUMMER SALE! 🔥",
+	UDim2.new(1, -8, 1, 0), UDim2.new(0, 4, 0, 0),
+	C.WHITE, nil, 1)
+saleLbl.TextSize = 14
+saleLbl.TextXAlignment = Enum.TextXAlignment.Center
+saleLbl.ZIndex = 11
+
+-- Bottom row: three tiles
+local bottomY = UDim.new(0.50, GRID_PAD * 0.5)
+local bottomH = UDim.new(0.50, -GRID_PAD * 1.5)
+local tileW   = UDim.new(1/3, -GRID_PAD * 1.1)
 
 local dailyTile, dailyTileBtn = makeTile(homePanel,
 	UDim2.new(tileW.Scale, tileW.Offset, bottomH.Scale, bottomH.Offset),
 	UDim2.new(0, GRID_PAD, bottomY.Scale, bottomY.Offset),
-	C.TILE_BG,
+	C.TILE_WHITE,
 	"DAILY QUESTS",
-	"Complete tasks for rewards")
+	"Complete tasks for rewards",
+	C.GREEN, 7)
 
 local weeklyTile, weeklyTileBtn = makeTile(homePanel,
 	UDim2.new(tileW.Scale, tileW.Offset, bottomH.Scale, bottomH.Offset),
-	UDim2.new(1/3, GRID_PAD * 0.33, bottomY.Scale, bottomY.Offset),
-	C.TILE_BG,
+	UDim2.new(1/3, GRID_PAD * 0.3, bottomY.Scale, bottomY.Offset),
+	C.TILE_DARK,
 	"WEEKLY QUESTS",
-	"Bigger goals, bigger prizes")
+	"Bigger goals, bigger prizes",
+	C.ACCENT, 7)
+
+-- White text on dark tile
+local weeklyChildren = weeklyTile:GetChildren()
+for _, c in ipairs(weeklyChildren) do
+	if c:IsA("TextLabel") then
+		c.TextColor3 = c.TextSize >= 16 and C.WHITE or Color3.fromRGB(168, 170, 188)
+	end
+end
 
 local challengeTile, challengeTileBtn = makeTile(homePanel,
 	UDim2.new(tileW.Scale, tileW.Offset, bottomH.Scale, bottomH.Offset),
-	UDim2.new(2/3, -GRID_PAD * 0.33, bottomY.Scale, bottomY.Offset),
-	C.TILE_BG,
+	UDim2.new(2/3, -GRID_PAD * 0.4, bottomY.Scale, bottomY.Offset),
+	C.TILE_BLUE,
 	"CHALLENGES",
-	"Earn special equipment")
+	"Earn special equipment",
+	C.ACCENT2, 7)
 
 -- ============================================================
--- INVENTORY PANEL  (detailed view)
+-- INVENTORY PANEL
 -- ============================================================
 
 local invPanel              = Instance.new("Frame")
@@ -530,32 +599,32 @@ invPanel.Parent             = contentArea
 
 local towerListFrame              = Instance.new("Frame")
 towerListFrame.Name               = "TowerList"
-towerListFrame.Size               = UDim2.new(0, 200, 1, -16)
-towerListFrame.Position           = UDim2.new(0, 8, 0, 8)
-towerListFrame.BackgroundColor3   = C.PANEL
+towerListFrame.Size               = UDim2.new(0, 220, 1, -16)
+towerListFrame.Position           = UDim2.new(0, GRID_PAD, 0, GRID_PAD * 0.5)
+towerListFrame.BackgroundColor3   = C.G2
 towerListFrame.BorderSizePixel    = 0
 towerListFrame.ClipsDescendants   = true
 towerListFrame.ZIndex             = 7
 towerListFrame.Parent             = invPanel
-makeCorner(towerListFrame, 8)
-makeStroke(towerListFrame, C.BORDER, 1, 0.3)
+makeCorner(towerListFrame, 10)
+makeStroke(towerListFrame, C.BORDER, 1, 0)
 
 local towerListHeader = makeLabel(towerListFrame, "TOWERS",
-	UDim2.new(1, 0, 0, 32),
+	UDim2.new(1, 0, 0, 42),
 	UDim2.new(0, 0, 0, 0),
-	C.TEXTSUB, C.PANEL, 0)
-towerListHeader.TextSize = 11
+	C.TEXTSUB, C.G3, 0)
+towerListHeader.TextSize = 14
 towerListHeader.TextXAlignment = Enum.TextXAlignment.Center
 towerListHeader.ZIndex = 8
 makeDivider(towerListHeader, true).Position = UDim2.new(0, 0, 1, 0)
 
 local towerScrollFrame            = Instance.new("ScrollingFrame")
 towerScrollFrame.Name             = "Scroll"
-towerScrollFrame.Size             = UDim2.new(1, 0, 1, -32)
-towerScrollFrame.Position         = UDim2.new(0, 0, 0, 32)
+towerScrollFrame.Size             = UDim2.new(1, 0, 1, -42)
+towerScrollFrame.Position         = UDim2.new(0, 0, 0, 42)
 towerScrollFrame.BackgroundTransparency = 1
 towerScrollFrame.BorderSizePixel  = 0
-towerScrollFrame.ScrollBarThickness = 3
+towerScrollFrame.ScrollBarThickness = 4
 towerScrollFrame.ScrollBarImageColor3 = C.ACCENT
 towerScrollFrame.CanvasSize       = UDim2.new(0, 0, 0, 0)
 towerScrollFrame.ZIndex           = 8
@@ -563,78 +632,92 @@ towerScrollFrame.Parent           = towerListFrame
 
 local towerScrollLayout           = Instance.new("UIListLayout")
 towerScrollLayout.SortOrder       = Enum.SortOrder.LayoutOrder
-towerScrollLayout.Padding         = UDim.new(0, 4)
+towerScrollLayout.Padding         = UDim.new(0, 5)
 towerScrollLayout.Parent          = towerScrollFrame
+
+local towerScrollPad = Instance.new("UIPadding")
+towerScrollPad.PaddingTop   = UDim.new(0, 6)
+towerScrollPad.PaddingLeft  = UDim.new(0, 6)
+towerScrollPad.PaddingRight = UDim.new(0, 6)
+towerScrollPad.Parent = towerScrollFrame
 
 local towerViewer              = Instance.new("Frame")
 towerViewer.Name               = "TowerViewer"
-towerViewer.Size               = UDim2.new(1, -224, 1, -16)
-towerViewer.Position           = UDim2.new(0, 216, 0, 8)
-towerViewer.BackgroundColor3   = C.PANEL
+towerViewer.Size               = UDim2.new(1, -248, 1, -16)
+towerViewer.Position           = UDim2.new(0, 238, 0, GRID_PAD * 0.5)
+towerViewer.BackgroundColor3   = C.G1
 towerViewer.BorderSizePixel    = 0
 towerViewer.ZIndex             = 7
 towerViewer.Parent             = invPanel
-makeCorner(towerViewer, 8)
-makeStroke(towerViewer, C.BORDER, 1, 0.3)
+makeCorner(towerViewer, 10)
+makeStroke(towerViewer, C.BORDER, 1, 0)
 
 local portraitBox              = Instance.new("Frame")
 portraitBox.Name               = "Portrait"
-portraitBox.Size               = UDim2.new(0, 100, 0, 100)
-portraitBox.Position           = UDim2.new(0.5, -50, 0, 14)
-portraitBox.BackgroundColor3   = C.PANEL2
+portraitBox.Size               = UDim2.new(0, 130, 0, 130)
+portraitBox.Position           = UDim2.new(0.5, -65, 0, 16)
+portraitBox.BackgroundColor3   = C.GRAY
 portraitBox.BorderSizePixel    = 0
 portraitBox.ZIndex             = 8
 portraitBox.Parent             = towerViewer
-makeCorner(portraitBox, 10)
-makeStroke(portraitBox, C.BORDER, 1, 0.2)
+makeCorner(portraitBox, 12)
+makeStroke(portraitBox, C.BORDER, 1, 0)
 
 local portraitLabel = makeLabel(portraitBox, "?",
 	UDim2.new(1, 0, 1, 0), UDim2.new(0, 0, 0, 0),
 	C.TEXTDIM, nil, 1)
-portraitLabel.TextSize = 36
+portraitLabel.TextSize = 48
 portraitLabel.TextXAlignment = Enum.TextXAlignment.Center
 portraitLabel.TextYAlignment = Enum.TextYAlignment.Center
 portraitLabel.ZIndex = 9
 
 local viewerName = makeLabel(towerViewer, "Select a tower",
-	UDim2.new(1, -10, 0, 24),
-	UDim2.new(0, 6, 0, 120),
+	UDim2.new(1, -10, 0, 32),
+	UDim2.new(0, 6, 0, 154),
 	C.TEXT, nil, 1)
-viewerName.TextSize = 16
+viewerName.TextSize = 21
 viewerName.TextXAlignment = Enum.TextXAlignment.Center
 viewerName.ZIndex = 8
 
 local viewerRarity = makeLabel(towerViewer, "──────",
-	UDim2.new(1, -10, 0, 18),
-	UDim2.new(0, 6, 0, 146),
+	UDim2.new(1, -10, 0, 22),
+	UDim2.new(0, 6, 0, 188),
 	C.TEXTSUB, nil, 1)
-viewerRarity.TextSize = 12
+viewerRarity.TextSize = 16
 viewerRarity.TextXAlignment = Enum.TextXAlignment.Center
 viewerRarity.ZIndex = 8
 
 local viewerDesc = Instance.new("TextLabel")
-viewerDesc.Size               = UDim2.new(1, -16, 0, 60)
-viewerDesc.Position           = UDim2.new(0, 8, 0, 170)
-viewerDesc.BackgroundTransparency = 1
+viewerDesc.Size               = UDim2.new(1, -20, 0, 72)
+viewerDesc.Position           = UDim2.new(0, 10, 0, 218)
+viewerDesc.BackgroundColor3   = C.GRAY
+viewerDesc.BackgroundTransparency = 0
+viewerDesc.BorderSizePixel    = 0
 viewerDesc.Text               = "No tower selected.\nClick a tower from the list."
 viewerDesc.TextColor3         = C.TEXTSUB
 viewerDesc.Font               = Enum.Font.Gotham
-viewerDesc.TextSize           = 12
+viewerDesc.TextSize           = 14
 viewerDesc.TextWrapped        = true
 viewerDesc.TextXAlignment     = Enum.TextXAlignment.Left
-viewerDesc.TextYAlignment     = Enum.TextYAlignment.Top
+viewerDesc.TextYAlignment     = Enum.TextYAlignment.Center
 viewerDesc.ZIndex             = 8
 viewerDesc.Parent             = towerViewer
+makeCorner(viewerDesc, 8)
+
+local descPad = Instance.new("UIPadding")
+descPad.PaddingLeft  = UDim.new(0, 10)
+descPad.PaddingRight = UDim.new(0, 10)
+descPad.Parent = viewerDesc
 
 local statsRow              = Instance.new("Frame")
 statsRow.Name               = "StatsRow"
-statsRow.Size               = UDim2.new(1, -16, 0, 48)
-statsRow.Position           = UDim2.new(0, 8, 0, 236)
-statsRow.BackgroundColor3   = C.PANEL2
+statsRow.Size               = UDim2.new(1, -20, 0, 62)
+statsRow.Position           = UDim2.new(0, 10, 0, 298)
+statsRow.BackgroundColor3   = C.GRAY
 statsRow.BorderSizePixel    = 0
 statsRow.ZIndex             = 8
 statsRow.Parent             = towerViewer
-makeCorner(statsRow, 6)
+makeCorner(statsRow, 8)
 
 local statsLayout           = Instance.new("UIListLayout")
 statsLayout.FillDirection   = Enum.FillDirection.Horizontal
@@ -644,7 +727,7 @@ statsLayout.Parent          = statsRow
 
 local TowerStats = require(ReplicatedStorage:WaitForChild("TowerStats", 30))
 
-local function makeStatCell(parent, icon, statName, layoutOrder)
+local function makeStatCell(parent, icon, layoutOrder)
 	local cell             = Instance.new("Frame")
 	cell.Size              = UDim2.new(0.25, 0, 1, 0)
 	cell.BackgroundTransparency = 1
@@ -653,18 +736,29 @@ local function makeStatCell(parent, icon, statName, layoutOrder)
 	cell.ZIndex            = 9
 	cell.Parent            = parent
 
-	local iconL = makeLabel(cell, icon, UDim2.new(1, 0, 0, 18),
+	-- Vertical divider between stats (except last)
+	if layoutOrder < 4 then
+		local vd = Instance.new("Frame")
+		vd.Size = UDim2.new(0, 1, 0.5, 0)
+		vd.Position = UDim2.new(1, 0, 0.25, 0)
+		vd.BackgroundColor3 = C.BORDER
+		vd.BorderSizePixel = 0
+		vd.ZIndex = 10
+		vd.Parent = cell
+	end
+
+	local iconL = makeLabel(cell, icon, UDim2.new(1, 0, 0, 26),
 		UDim2.new(0, 0, 0, 4), C.TEXTSUB, nil, 1)
-	iconL.TextSize = 14
+	iconL.TextSize = 18
 	iconL.TextXAlignment = Enum.TextXAlignment.Center
 	iconL.ZIndex = 10
 
 	local valL = makeLabel(cell, "–",
-		UDim2.new(1, 0, 0, 16),
-		UDim2.new(0, 0, 0, 24),
+		UDim2.new(1, 0, 0, 24),
+		UDim2.new(0, 0, 0, 32),
 		C.TEXT, nil, 1)
 	valL.Name = "Value"
-	valL.TextSize = 12
+	valL.TextSize = 16
 	valL.Font = Enum.Font.GothamBold
 	valL.TextXAlignment = Enum.TextXAlignment.Center
 	valL.ZIndex = 10
@@ -672,22 +766,22 @@ local function makeStatCell(parent, icon, statName, layoutOrder)
 	return valL
 end
 
-local statAtk  = makeStatCell(statsRow, "⚔️",  "ATK", 1)
-local statRng  = makeStatCell(statsRow, "🎯",  "RNG", 2)
-local statSpd  = makeStatCell(statsRow, "⚡",  "SPD", 3)
-local statHP   = makeStatCell(statsRow, "❤️",  "HP",  4)
+local statAtk  = makeStatCell(statsRow, "⚔️",  1)
+local statRng  = makeStatCell(statsRow, "🎯",  2)
+local statSpd  = makeStatCell(statsRow, "⚡",  3)
+local statHP   = makeStatCell(statsRow, "❤️",  4)
 
 local equipHeader = makeLabel(towerViewer, "EQUIPMENT SLOTS",
-	UDim2.new(1, -16, 0, 18),
-	UDim2.new(0, 8, 0, 292),
+	UDim2.new(1, -20, 0, 22),
+	UDim2.new(0, 10, 0, 368),
 	C.TEXTSUB, nil, 1)
-equipHeader.TextSize = 10
+equipHeader.TextSize = 14
 equipHeader.ZIndex = 8
 
 local equipRow              = Instance.new("Frame")
 equipRow.Name               = "EquipRow"
-equipRow.Size               = UDim2.new(1, -16, 0, 52)
-equipRow.Position           = UDim2.new(0, 8, 0, 312)
+equipRow.Size               = UDim2.new(1, -20, 0, 62)
+equipRow.Position           = UDim2.new(0, 10, 0, 392)
 equipRow.BackgroundTransparency = 1
 equipRow.BorderSizePixel    = 0
 equipRow.ZIndex             = 8
@@ -701,24 +795,24 @@ local function buildEquipSlots(slotCount)
 	end
 	equipSlotLabels = {}
 
-	local slotW = 50
-	local gap   = 6
+	local slotW = 54
+	local gap   = 8
 	for i = 1, slotCount do
 		local slot              = Instance.new("Frame")
-		slot.Size               = UDim2.new(0, slotW, 0, 50)
+		slot.Size               = UDim2.new(0, slotW, 0, 54)
 		slot.Position           = UDim2.new(0, (i-1) * (slotW + gap), 0, 0)
-		slot.BackgroundColor3   = C.PANEL2
+		slot.BackgroundColor3   = C.GRAY
 		slot.BorderSizePixel    = 0
 		slot.ZIndex             = 9
 		slot.Parent             = equipRow
-		makeCorner(slot, 6)
-		makeStroke(slot, C.BORDER, 1, 0.2)
+		makeCorner(slot, 8)
+		makeStroke(slot, C.BORDER, 1, 0)
 
 		local slotLabel = makeLabel(slot, "+",
 			UDim2.new(1, 0, 1, 0),
 			UDim2.new(0, 0, 0, 0),
 			C.TEXTDIM, nil, 1)
-		slotLabel.TextSize = 18
+		slotLabel.TextSize = 26
 		slotLabel.TextXAlignment = Enum.TextXAlignment.Center
 		slotLabel.TextYAlignment = Enum.TextYAlignment.Center
 		slotLabel.ZIndex = 10
@@ -729,7 +823,7 @@ end
 buildEquipSlots(0)
 
 -- ============================================================
--- Build the tower list entries
+-- Tower list entries
 -- ============================================================
 
 local towerEntryButtons = {}
@@ -747,8 +841,8 @@ local function updateViewerForTower(towerName: string)
 		viewerRarity.Text = rarityStars(td.rarity)
 		viewerRarity.TextColor3 = rarityColor(td.rarity)
 		viewerDesc.Text  = isUnlocked
-		and (td.description .. "\n\nRole: " .. (td.role or "–"))
-		or  "🔒 Tower locked.\nObtain via Gacha or the Shop."
+			and (td.description .. "\n\nRole: " .. (td.role or "–"))
+			or  "🔒 Tower locked.\nObtain via Gacha or the Shop."
 		buildEquipSlots(isUnlocked and (td.equipmentSlots or 0) or 0)
 	else
 		viewerRarity.Text = "–"
@@ -788,37 +882,46 @@ local function buildTowerListEntries()
 
 		local entry            = Instance.new("Frame")
 		entry.Name             = name
-		entry.Size             = UDim2.new(1, -8, 0, 60)
-		entry.BackgroundColor3 = isUnlocked and C.PANEL or C.PANEL2
-		entry.BackgroundTransparency = 0.1
+		entry.Size             = UDim2.new(1, 0, 0, 76)
+		entry.BackgroundColor3 = isUnlocked and C.G1 or C.G3
+		entry.BackgroundTransparency = 0
 		entry.BorderSizePixel  = 0
 		entry.ZIndex           = 9
 		entry.LayoutOrder      = isUnlocked and 0 or 1
 		entry.Parent           = towerScrollFrame
-		makeCorner(entry, 6)
-		makeStroke(entry, isUnlocked and C.ACCENT or C.BORDER, 1, isUnlocked and 0.5 or 0.4)
+		makeCorner(entry, 8)
+		makeStroke(entry, isUnlocked and C.ACCENT or C.BORDER, 1, isUnlocked and 0.4 or 0)
+
+		-- Left accent bar per rarity
+		local rBar = Instance.new("Frame")
+		rBar.Size = UDim2.new(0, 4, 1, 0)
+		rBar.BackgroundColor3 = isUnlocked and rarityColor(td.rarity) or C.TEXTDIM
+		rBar.BorderSizePixel = 0
+		rBar.ZIndex = 10
+		rBar.Parent = entry
+		makeCorner(rBar, 3)
 
 		local nameL = makeLabel(entry, td.displayName,
-			UDim2.new(1, -10, 0, 18),
-			UDim2.new(0, 8, 0, 8),
+			UDim2.new(1, -20, 0, 26),
+			UDim2.new(0, 12, 0, 12),
 			isUnlocked and C.TEXT or C.TEXTDIM, nil, 1)
-		nameL.TextSize = 13
+		nameL.TextSize = 17
 		nameL.ZIndex = 10
 
 		local rarityL = makeLabel(entry, rarityStars(td.rarity),
-			UDim2.new(1, -10, 0, 14),
-			UDim2.new(0, 8, 0, 28),
+			UDim2.new(1, -20, 0, 18),
+			UDim2.new(0, 12, 0, 40),
 			rarityColor(td.rarity), nil, 1)
-		rarityL.TextSize = 10
+		rarityL.TextSize = 13
 		rarityL.Font = Enum.Font.Gotham
 		rarityL.ZIndex = 10
 
 		if not isUnlocked then
 			local lockL = makeLabel(entry, "🔒",
-				UDim2.new(0, 24, 0, 24),
-				UDim2.new(1, -30, 0.5, -12),
+				UDim2.new(0, 26, 0, 26),
+				UDim2.new(1, -32, 0.5, -13),
 				C.RED, nil, 1)
-			lockL.TextSize = 16
+			lockL.TextSize = 18
 			lockL.TextXAlignment = Enum.TextXAlignment.Center
 			lockL.ZIndex = 10
 		end
@@ -833,19 +936,19 @@ local function buildTowerListEntries()
 		btn.MouseButton1Click:Connect(function()
 			updateViewerForTower(name)
 			for n, b in pairs(towerEntryButtons) do
-				b.BackgroundTransparency = n == name and 0.05 or 0.3
+				b.BackgroundColor3 = n == name and C.G2 or (unlockedTowers[n] and C.G1 or C.G3)
 			end
 		end)
 
 		towerEntryButtons[name] = entry
-		totalH = totalH + 64
+		totalH = totalH + 81
 	end
 
 	towerScrollFrame.CanvasSize = UDim2.new(0, 0, 0, totalH)
 end
 
 -- ============================================================
--- QUESTS PANEL  (detailed view)
+-- QUESTS PANEL
 -- ============================================================
 
 local questPanel              = Instance.new("Frame")
@@ -858,12 +961,15 @@ questPanel.ZIndex             = 6
 questPanel.Parent             = contentArea
 
 local questTabBar             = Instance.new("Frame")
-questTabBar.Size              = UDim2.new(1, 0, 0, 36)
-questTabBar.BackgroundColor3  = C.PANEL
+questTabBar.Size              = UDim2.new(1, 0, 0, 52)
+questTabBar.BackgroundColor3  = C.G2
 questTabBar.BackgroundTransparency = 0
 questTabBar.BorderSizePixel   = 0
 questTabBar.ZIndex            = 7
 questTabBar.Parent            = questPanel
+
+local questDivider = makeDivider(questTabBar, true)
+questDivider.Position = UDim2.new(0, 0, 1, -1)
 
 local questTabLayout          = Instance.new("UIListLayout")
 questTabLayout.FillDirection  = Enum.FillDirection.Horizontal
@@ -880,8 +986,8 @@ local tabDefs = {
 }
 
 local questScrollContainer              = Instance.new("Frame")
-questScrollContainer.Size               = UDim2.new(1, 0, 1, -36)
-questScrollContainer.Position           = UDim2.new(0, 0, 0, 36)
+questScrollContainer.Size               = UDim2.new(1, 0, 1, -52)
+questScrollContainer.Position           = UDim2.new(0, 0, 0, 52)
 questScrollContainer.BackgroundTransparency = 1
 questScrollContainer.BorderSizePixel    = 0
 questScrollContainer.ZIndex             = 7
@@ -890,27 +996,46 @@ questScrollContainer.Parent             = questPanel
 for _, tabDef in ipairs(tabDefs) do
 	local key = tabDef.key
 
+	local tabContainer = Instance.new("Frame")
+	tabContainer.Size = UDim2.new(0, 200, 1, 0)
+	tabContainer.BackgroundColor3 = C.G1
+	tabContainer.BackgroundTransparency = 1
+	tabContainer.BorderSizePixel = 0
+	tabContainer.LayoutOrder = tabDef.layoutOrder
+	tabContainer.ZIndex = 8
+	tabContainer.Parent = questTabBar
+
 	local tabBtn              = Instance.new("TextButton")
-	tabBtn.Size               = UDim2.new(0, 160, 1, 0)
-	tabBtn.BackgroundColor3   = C.PANEL2
-	tabBtn.BackgroundTransparency = 0.2
+	tabBtn.Size               = UDim2.new(1, 0, 1, 0)
+	tabBtn.BackgroundTransparency = 1
 	tabBtn.BorderSizePixel    = 0
 	tabBtn.Text               = tabDef.label
 	tabBtn.TextColor3         = C.TEXTSUB
 	tabBtn.Font               = Enum.Font.GothamBold
-	tabBtn.TextSize           = 12
+	tabBtn.TextSize           = 17
 	tabBtn.AutoButtonColor    = false
-	tabBtn.LayoutOrder        = tabDef.layoutOrder
-	tabBtn.ZIndex             = 8
-	tabBtn.Parent             = questTabBar
-	questTabBtns[key]         = tabBtn
+	tabBtn.ZIndex             = 9
+	tabBtn.Parent             = tabContainer
+
+	local qActiveBar = Instance.new("Frame")
+	qActiveBar.Size = UDim2.new(0.6, 0, 0, 3)
+	qActiveBar.AnchorPoint = Vector2.new(0.5, 1)
+	qActiveBar.Position = UDim2.new(0.5, 0, 1, 0)
+	qActiveBar.BackgroundColor3 = C.ACCENT
+	qActiveBar.BorderSizePixel = 0
+	qActiveBar.Visible = false
+	qActiveBar.ZIndex = 10
+	qActiveBar.Parent = tabContainer
+	makeCorner(qActiveBar, 2)
+
+	questTabBtns[key] = { btn = tabBtn, bar = qActiveBar }
 
 	local scroll              = Instance.new("ScrollingFrame")
 	scroll.Name               = key .. "Scroll"
 	scroll.Size               = UDim2.new(1, 0, 1, 0)
 	scroll.BackgroundTransparency = 1
 	scroll.BorderSizePixel    = 0
-	scroll.ScrollBarThickness = 3
+	scroll.ScrollBarThickness = 4
 	scroll.ScrollBarImageColor3 = C.ACCENT
 	scroll.CanvasSize         = UDim2.new(0, 0, 0, 0)
 	scroll.Visible            = (key == "Daily")
@@ -919,43 +1044,43 @@ for _, tabDef in ipairs(tabDefs) do
 
 	local scrollLayout        = Instance.new("UIListLayout")
 	scrollLayout.SortOrder    = Enum.SortOrder.LayoutOrder
-	scrollLayout.Padding      = UDim.new(0, 6)
+	scrollLayout.Padding      = UDim.new(0, 8)
 	scrollLayout.Parent       = scroll
 
 	local scrollPad           = Instance.new("UIPadding")
-	scrollPad.PaddingTop      = UDim.new(0, 8)
-	scrollPad.PaddingLeft     = UDim.new(0, 8)
-	scrollPad.PaddingRight    = UDim.new(0, 8)
+	scrollPad.PaddingTop      = UDim.new(0, 10)
+	scrollPad.PaddingLeft     = UDim.new(0, 12)
+	scrollPad.PaddingRight    = UDim.new(0, 12)
 	scrollPad.Parent          = scroll
 
 	questScrolls[key] = scroll
 
 	local quests  = TowerData.Quests[key] or {}
-	local totalH  = 8
+	local totalH  = 10
 	for _, quest in ipairs(quests) do
 		local card              = Instance.new("Frame")
 		card.Name               = quest.id
-		card.Size               = UDim2.new(1, 0, 0, 80)
-		card.BackgroundColor3   = C.PANEL
+		card.Size               = UDim2.new(1, 0, 0, 100)
+		card.BackgroundColor3   = C.G1
 		card.BackgroundTransparency = 0
 		card.BorderSizePixel    = 0
 		card.ZIndex             = 9
 		card.Parent             = scroll
-		makeCorner(card, 8)
-		makeStroke(card, C.BORDER, 1, 0.3)
+		makeCorner(card, 10)
+		makeStroke(card, C.BORDER, 1, 0)
 
 		local qname = makeLabel(card, quest.displayName,
-			UDim2.new(1, -100, 0, 20),
-			UDim2.new(0, 10, 0, 8),
+			UDim2.new(1, -130, 0, 28),
+			UDim2.new(0, 14, 0, 12),
 			C.TEXT, nil, 1)
-		qname.TextSize = 14
+		qname.TextSize = 18
 		qname.ZIndex = 10
 
 		local qdesc = makeLabel(card, quest.description,
-			UDim2.new(1, -100, 0, 28),
-			UDim2.new(0, 10, 0, 28),
+			UDim2.new(1, -130, 0, 26),
+			UDim2.new(0, 14, 0, 40),
 			C.TEXTSUB, nil, 1)
-		qdesc.TextSize = 11
+		qdesc.TextSize = 14
 		qdesc.Font = Enum.Font.Gotham
 		qdesc.TextWrapped = true
 		qdesc.ZIndex = 10
@@ -973,21 +1098,22 @@ for _, tabDef in ipairs(tabDefs) do
 		end
 
 		local rewardL = makeLabel(card, "Reward: " .. table.concat(rewardParts, "  "),
-			UDim2.new(1, -120, 0, 16),
-			UDim2.new(0, 10, 0, 58),
+			UDim2.new(1, -130, 0, 20),
+			UDim2.new(0, 14, 0, 70),
 			C.GOLD, nil, 1)
-		rewardL.TextSize = 11
-		rewardL.Font = Enum.Font.Gotham
+		rewardL.TextSize = 14
+		rewardL.Font = Enum.Font.GothamBold
 		rewardL.ZIndex = 10
 
 		local progBg              = Instance.new("Frame")
-		progBg.Size               = UDim2.new(0, 100, 0, 8)
-		progBg.Position           = UDim2.new(1, -110, 0, 12)
-		progBg.BackgroundColor3   = C.PANEL2
+		progBg.Size               = UDim2.new(0, 116, 0, 12)
+		progBg.Position           = UDim2.new(1, -128, 0, 18)
+		progBg.BackgroundColor3   = C.GRAY
 		progBg.BorderSizePixel    = 0
 		progBg.ZIndex             = 10
 		progBg.Parent             = card
-		makeCorner(progBg, 4)
+		makeCorner(progBg, 6)
+		makeStroke(progBg, C.BORDER, 1, 0)
 
 		local progFill            = Instance.new("Frame")
 		progFill.Size             = UDim2.new(0, 0, 1, 0)
@@ -995,25 +1121,25 @@ for _, tabDef in ipairs(tabDefs) do
 		progFill.BorderSizePixel  = 0
 		progFill.ZIndex           = 11
 		progFill.Parent           = progBg
-		makeCorner(progFill, 4)
+		makeCorner(progFill, 6)
 
 		local progText = makeLabel(card, "0 / " .. quest.goal,
-			UDim2.new(0, 100, 0, 14),
-			UDim2.new(1, -110, 0, 24),
+			UDim2.new(0, 116, 0, 18),
+			UDim2.new(1, -128, 0, 34),
 			C.TEXTSUB, nil, 1)
-		progText.TextSize = 10
+		progText.TextSize = 12
 		progText.TextXAlignment = Enum.TextXAlignment.Center
 		progText.ZIndex = 10
 
 		local claimBtn = makeButton(card, "Claim",
-			UDim2.new(0, 90, 0, 26),
-			UDim2.new(1, -102, 1, -34),
-			C.TEXTDIM, C.TEXT)
-		claimBtn.TextSize = 12
+			UDim2.new(0, 104, 0, 34),
+			UDim2.new(1, -118, 1, -44),
+			C.GRAY_DARK, C.TEXT)
+		claimBtn.TextSize = 15
 		claimBtn.ZIndex = 10
-		makeCorner(claimBtn, 5)
+		makeCorner(claimBtn, 7)
 
-		totalH = totalH + 86
+		totalH = totalH + 108
 	end
 	scroll.CanvasSize = UDim2.new(0, 0, 0, totalH)
 end
@@ -1023,21 +1149,19 @@ local function switchQuestTab(key: string)
 	for k, scroll in pairs(questScrolls) do
 		scroll.Visible = (k == key)
 	end
-	for k, btn in pairs(questTabBtns) do
+	for k, info in pairs(questTabBtns) do
 		if k == key then
-			btn.BackgroundTransparency = 0
-			btn.TextColor3 = C.ACCENT
-			btn.BackgroundColor3 = C.PANEL
+			info.btn.TextColor3 = C.ACCENT
+			info.bar.Visible = true
 		else
-			btn.BackgroundTransparency = 0.2
-			btn.TextColor3 = C.TEXTSUB
-			btn.BackgroundColor3 = C.PANEL2
+			info.btn.TextColor3 = C.TEXTSUB
+			info.bar.Visible = false
 		end
 	end
 end
 
-for k, btn in pairs(questTabBtns) do
-	btn.MouseButton1Click:Connect(function()
+for k, info in pairs(questTabBtns) do
+	info.btn.MouseButton1Click:Connect(function()
 		switchQuestTab(k)
 	end)
 end
@@ -1045,7 +1169,7 @@ end
 switchQuestTab("Daily")
 
 -- ============================================================
--- GACHA PANEL  (detailed view)
+-- GACHA PANEL
 -- ============================================================
 
 local gachaPanel              = Instance.new("Frame")
@@ -1058,8 +1182,8 @@ gachaPanel.ZIndex             = 6
 gachaPanel.Parent             = contentArea
 
 local bannerRow              = Instance.new("Frame")
-bannerRow.Size               = UDim2.new(1, -16, 0, 60)
-bannerRow.Position           = UDim2.new(0, 8, 0, 8)
+bannerRow.Size               = UDim2.new(1, -24, 0, 80)
+bannerRow.Position           = UDim2.new(0, 12, 0, 12)
 bannerRow.BackgroundTransparency = 1
 bannerRow.BorderSizePixel    = 0
 bannerRow.ZIndex             = 7
@@ -1074,150 +1198,145 @@ for i, bKey in ipairs({ "standard", "special" }) do
 	local bBtn              = Instance.new("TextButton")
 	bBtn.Size               = UDim2.new(0.5, -6, 1, 0)
 	bBtn.Position           = UDim2.new((i-1)*0.5, (i-1)*6, 0, 0)
-	bBtn.BackgroundColor3   = isActive and C.ACCENT or C.PANEL
-	bBtn.BackgroundTransparency = isActive and 0.1 or 0
+	bBtn.BackgroundColor3   = isActive and C.ACCENT or C.G1
+	bBtn.BackgroundTransparency = 0
 	bBtn.BorderSizePixel    = 0
 	bBtn.Text               = ""
 	bBtn.AutoButtonColor    = false
 	bBtn.ZIndex             = 8
 	bBtn.Parent             = bannerRow
-	makeCorner(bBtn, 8)
-	local bStroke = makeStroke(bBtn, isActive and C.ACCENT or C.BORDER, 1, isActive and 0.2 or 0.4)
+	makeCorner(bBtn, 10)
+	local bStroke = makeStroke(bBtn, isActive and C.ACCENT or C.BORDER, 1, isActive and 0 or 0)
 
 	local bName = makeLabel(bBtn, bData.displayName,
-		UDim2.new(1, -10, 0, 20),
-		UDim2.new(0, 10, 0, 8),
+		UDim2.new(1, -16, 0, 30),
+		UDim2.new(0, 14, 0, 12),
 		isActive and C.WHITE or C.TEXT, nil, 1)
-	bName.TextSize = 13
+	bName.TextSize = 17
 	bName.ZIndex = 9
 
 	local bType = makeLabel(bBtn, bKey == "special" and "⭐ RATE-UP BANNER" or "📦 STANDARD",
-		UDim2.new(1, -10, 0, 16),
-		UDim2.new(0, 10, 0, 30),
-		bKey == "special" and C.GOLD or C.TEXTSUB, nil, 1)
-	bType.TextSize = 10
+		UDim2.new(1, -16, 0, 22),
+		UDim2.new(0, 14, 0, 42),
+		bKey == "special" and (isActive and C.GOLD or C.GOLD) or C.TEXTSUB, nil, 1)
+	bType.TextSize = 14
 	bType.ZIndex = 9
 
 	bannerBtns[bKey] = { button = bBtn, nameLabel = bName, typeLabel = bType, stroke = bStroke }
 end
 
 local bannerDesc              = Instance.new("TextLabel")
-bannerDesc.Size               = UDim2.new(1, -16, 0, 56)
-bannerDesc.Position           = UDim2.new(0, 8, 0, 76)
-bannerDesc.BackgroundColor3   = C.PANEL
+bannerDesc.Size               = UDim2.new(1, -24, 0, 64)
+bannerDesc.Position           = UDim2.new(0, 12, 0, 100)
+bannerDesc.BackgroundColor3   = C.GRAY
 bannerDesc.BackgroundTransparency = 0
 bannerDesc.BorderSizePixel    = 0
 bannerDesc.Text               = TowerData.Banners.standard.description
 bannerDesc.TextColor3         = C.TEXTSUB
 bannerDesc.Font               = Enum.Font.Gotham
-bannerDesc.TextSize           = 11
+bannerDesc.TextSize           = 14
 bannerDesc.TextWrapped        = true
 bannerDesc.TextXAlignment     = Enum.TextXAlignment.Left
-bannerDesc.TextYAlignment     = Enum.TextYAlignment.Top
+bannerDesc.TextYAlignment     = Enum.TextYAlignment.Center
 bannerDesc.ZIndex             = 7
 bannerDesc.Parent             = gachaPanel
-makeCorner(bannerDesc, 8)
-makeStroke(bannerDesc, C.BORDER, 1, 0.3)
+makeCorner(bannerDesc, 10)
+makeStroke(bannerDesc, C.BORDER, 1, 0)
 
-local descPad = Instance.new("UIPadding")
-descPad.PaddingTop   = UDim.new(0, 6)
-descPad.PaddingLeft  = UDim.new(0, 8)
-descPad.PaddingRight = UDim.new(0, 8)
-descPad.Parent       = bannerDesc
+local descPad2 = Instance.new("UIPadding")
+descPad2.PaddingTop   = UDim.new(0, 6)
+descPad2.PaddingLeft  = UDim.new(0, 12)
+descPad2.PaddingRight = UDim.new(0, 12)
+descPad2.Parent       = bannerDesc
 
-local rateUpLabel             = makeLabel(gachaPanel, "Rate-Up: Deadeye",
-	UDim2.new(1, -16, 0, 20),
-	UDim2.new(0, 8, 0, 138),
+local rateUpLabel = makeLabel(gachaPanel, "Rate-Up: Deadeye",
+	UDim2.new(1, -24, 0, 26),
+	UDim2.new(0, 12, 0, 172),
 	C.GOLD, nil, 1)
-rateUpLabel.TextSize = 12
+rateUpLabel.TextSize = 16
 rateUpLabel.Visible = (activeBanner == "special")
 rateUpLabel.ZIndex = 7
 
-local pityLabel               = makeLabel(gachaPanel, "Pity: 0 / 70  (Gem pulls only)",
-	UDim2.new(1, -16, 0, 18),
-	UDim2.new(0, 8, 0, 162),
+local pityLabel = makeLabel(gachaPanel, "Pity: 0 / 70  (Gem pulls only)",
+	UDim2.new(1, -24, 0, 22),
+	UDim2.new(0, 12, 0, 202),
 	C.TEXTSUB, nil, 1)
-pityLabel.TextSize = 11
+pityLabel.TextSize = 14
 pityLabel.Font = Enum.Font.Gotham
 pityLabel.ZIndex = 7
 
+-- Pull buttons row
 local pullRow               = Instance.new("Frame")
-pullRow.Size                = UDim2.new(1, -16, 0, 46)
-pullRow.Position            = UDim2.new(0, 8, 0, 188)
+pullRow.Size                = UDim2.new(1, -24, 0, 58)
+pullRow.Position            = UDim2.new(0, 12, 0, 232)
 pullRow.BackgroundTransparency = 1
 pullRow.BorderSizePixel     = 0
 pullRow.ZIndex              = 7
 pullRow.Parent              = gachaPanel
 
-local gem1Btn = makeButton(pullRow, "💎 ×1  (160)",
-	UDim2.new(0.25, -4, 1, 0), UDim2.new(0, 0, 0, 0),
-	C.GEM, C.WHITE)
-makeCorner(gem1Btn, 6)
-gem1Btn.TextSize = 12
-gem1Btn.ZIndex = 8
+local pullLayout = Instance.new("UIListLayout")
+pullLayout.FillDirection = Enum.FillDirection.Horizontal
+pullLayout.SortOrder = Enum.SortOrder.LayoutOrder
+pullLayout.Padding = UDim.new(0, 8)
+pullLayout.Parent = pullRow
 
-local gem10Btn = makeButton(pullRow, "💎 ×10  (1,600)",
-	UDim2.new(0.25, -4, 1, 0), UDim2.new(0.25, 4, 0, 0),
-	C.GEM, C.WHITE)
-makeCorner(gem10Btn, 6)
-gem10Btn.TextSize = 12
-gem10Btn.ZIndex = 8
+local function makePullBtn(parent, text, bg, textColor, layoutOrder)
+	local b = makeButton(parent, text,
+		UDim2.new(0.25, -6, 1, 0), UDim2.new(0,0,0,0),
+		bg, textColor)
+	b.TextSize = 14
+	b.LayoutOrder = layoutOrder
+	b.ZIndex = 8
+	makeCorner(b, 8)
+	return b
+end
 
-local coin1Btn = makeButton(pullRow, "🪙 ×1  (1,000)",
-	UDim2.new(0.25, -4, 1, 0), UDim2.new(0.5, 4, 0, 0),
-	Color3.fromRGB(200, 170, 80), C.TEXT)
-makeCorner(coin1Btn, 6)
-coin1Btn.TextSize = 12
-coin1Btn.ZIndex = 8
-
-local coin10Btn = makeButton(pullRow, "🪙 ×10  (10,000)",
-	UDim2.new(0.25, -4, 1, 0), UDim2.new(0.75, 8, 0, 0),
-	Color3.fromRGB(200, 170, 80), C.TEXT)
-makeCorner(coin10Btn, 6)
-coin10Btn.TextSize = 12
-coin10Btn.ZIndex = 8
+local gem1Btn   = makePullBtn(pullRow, "💎 ×1  (160)",    C.GEM,                              C.WHITE, 1)
+local gem10Btn  = makePullBtn(pullRow, "💎 ×10  (1,600)", Color3.fromRGB(105, 55, 220),       C.WHITE, 2)
+local coin1Btn  = makePullBtn(pullRow, "🪙 ×1  (1,000)",  Color3.fromRGB(210, 175, 60),       C.TEXT,  3)
+local coin10Btn = makePullBtn(pullRow, "🪙 ×10  (10,000)",Color3.fromRGB(185, 155, 40),       C.TEXT,  4)
 
 local noPityNote = makeLabel(gachaPanel, "⚠ Coin pulls do not count toward pity.",
-	UDim2.new(1, -16, 0, 16),
-	UDim2.new(0, 8, 0, 240),
+	UDim2.new(1, -24, 0, 20),
+	UDim2.new(0, 12, 0, 298),
 	C.RED, nil, 1)
-noPityNote.TextSize = 10
+noPityNote.TextSize = 14
 noPityNote.Font = Enum.Font.Gotham
 noPityNote.ZIndex = 7
 
 local resultsHeader = makeLabel(gachaPanel, "RECENT PULLS",
-	UDim2.new(1, -16, 0, 18),
-	UDim2.new(0, 8, 0, 264),
+	UDim2.new(1, -24, 0, 22),
+	UDim2.new(0, 12, 0, 324),
 	C.TEXTSUB, nil, 1)
-resultsHeader.TextSize = 10
+resultsHeader.TextSize = 14
 resultsHeader.ZIndex = 7
 
 local resultsScroll              = Instance.new("ScrollingFrame")
 resultsScroll.Name               = "ResultsScroll"
-resultsScroll.Size               = UDim2.new(1, -16, 1, -294)
-resultsScroll.Position           = UDim2.new(0, 8, 0, 286)
-resultsScroll.BackgroundColor3   = C.PANEL
+resultsScroll.Size               = UDim2.new(1, -24, 1, -356)
+resultsScroll.Position           = UDim2.new(0, 12, 0, 350)
+resultsScroll.BackgroundColor3   = C.GRAY
 resultsScroll.BackgroundTransparency = 0
 resultsScroll.BorderSizePixel    = 0
-resultsScroll.ScrollBarThickness = 3
+resultsScroll.ScrollBarThickness = 4
 resultsScroll.ScrollBarImageColor3 = C.ACCENT
 resultsScroll.CanvasSize         = UDim2.new(0, 0, 0, 0)
 resultsScroll.ZIndex             = 7
 resultsScroll.Parent             = gachaPanel
-makeCorner(resultsScroll, 8)
-makeStroke(resultsScroll, C.BORDER, 1, 0.3)
+makeCorner(resultsScroll, 10)
+makeStroke(resultsScroll, C.BORDER, 1, 0)
 
 local resultsLayout              = Instance.new("UIListLayout")
 resultsLayout.FillDirection      = Enum.FillDirection.Horizontal
 resultsLayout.SortOrder          = Enum.SortOrder.LayoutOrder
-resultsLayout.Padding            = UDim.new(0, 6)
+resultsLayout.Padding            = UDim.new(0, 8)
 resultsLayout.Wraps              = true
 resultsLayout.Parent             = resultsScroll
 
 local resultsPad                 = Instance.new("UIPadding")
-resultsPad.PaddingTop            = UDim.new(0, 6)
-resultsPad.PaddingLeft           = UDim.new(0, 6)
-resultsPad.PaddingRight          = UDim.new(0, 6)
+resultsPad.PaddingTop            = UDim.new(0, 8)
+resultsPad.PaddingLeft           = UDim.new(0, 8)
+resultsPad.PaddingRight          = UDim.new(0, 8)
 resultsPad.Parent                = resultsScroll
 
 local resultCards = {}
@@ -1227,45 +1346,54 @@ local function addResultCard(towerName: string, rarity: string, isNew: boolean)
 	local rColor = rarityColor(rarity)
 
 	local card              = Instance.new("Frame")
-	card.Size               = UDim2.new(0, 72, 0, 80)
-	card.BackgroundColor3   = C.PANEL
+	card.Size               = UDim2.new(0, 80, 0, 90)
+	card.BackgroundColor3   = C.G1
 	card.BorderSizePixel    = 0
 	card.LayoutOrder        = -(#resultCards)
 	card.ZIndex             = 8
 	card.Parent             = resultsScroll
-	makeCorner(card, 8)
+	makeCorner(card, 10)
 	makeStroke(card, rColor, 2, 0)
 
 	local icon = makeLabel(card, td and td.displayName:sub(1,2) or "??",
-		UDim2.new(1, 0, 0, 40),
+		UDim2.new(1, 0, 0, 48),
 		UDim2.new(0, 0, 0, 4),
 		rColor, nil, 1)
-	icon.TextSize = 18
+	icon.TextSize = 22
 	icon.TextXAlignment = Enum.TextXAlignment.Center
 	icon.ZIndex = 9
 
 	local nameL = makeLabel(card, td and td.displayName or towerName,
-		UDim2.new(1, -4, 0, 24),
-		UDim2.new(0, 2, 0, 44),
+		UDim2.new(1, -6, 0, 30),
+		UDim2.new(0, 3, 0, 52),
 		C.TEXT, nil, 1)
-	nameL.TextSize = 10
+	nameL.TextSize = 12
 	nameL.TextWrapped = true
 	nameL.TextXAlignment = Enum.TextXAlignment.Center
 	nameL.ZIndex = 9
 
 	if isNew then
-		local newTag = makeLabel(card, "NEW",
-			UDim2.new(1, 0, 0, 16),
-			UDim2.new(0, 0, 0, 64),
-			C.GREEN, nil, 1)
-		newTag.TextSize = 10
-		newTag.Font = Enum.Font.GothamBold
-		newTag.TextXAlignment = Enum.TextXAlignment.Center
+		local newTag = Instance.new("Frame")
+		newTag.Size = UDim2.new(1, 0, 0, 18)
+		newTag.Position = UDim2.new(0, 0, 1, -18)
+		newTag.BackgroundColor3 = C.GREEN
+		newTag.BorderSizePixel = 0
 		newTag.ZIndex = 9
+		newTag.Parent = card
+		makeCorner(newTag, 5)
+
+		local newL = makeLabel(newTag, "NEW",
+			UDim2.new(1, 0, 1, 0),
+			UDim2.new(0, 0, 0, 0),
+			C.WHITE, nil, 1)
+		newL.TextSize = 11
+		newL.Font = Enum.Font.GothamBold
+		newL.TextXAlignment = Enum.TextXAlignment.Center
+		newL.ZIndex = 10
 	end
 
 	table.insert(resultCards, card)
-	local contentH = math.ceil(#resultCards / 6) * 92 + 12
+	local contentH = math.ceil(#resultCards / 6) * 104 + 16
 	resultsScroll.CanvasSize = UDim2.new(0, 0, 0, contentH)
 	resultsScroll.CanvasPosition = Vector2.new(0, 0)
 end
@@ -1282,12 +1410,11 @@ local function switchBanner(bannerKey: string)
 
 	for k, info in pairs(bannerBtns) do
 		local isActive = (k == bannerKey)
-		info.button.BackgroundColor3 = isActive and C.ACCENT or C.PANEL
-		info.button.BackgroundTransparency = isActive and 0.1 or 0
+		info.button.BackgroundColor3 = isActive and C.ACCENT or C.G1
 		info.nameLabel.TextColor3 = isActive and C.WHITE or C.TEXT
 		if info.stroke then
 			info.stroke.Color = isActive and C.ACCENT or C.BORDER
-			info.stroke.Transparency = isActive and 0.2 or 0.4
+			info.stroke.Transparency = 0
 		end
 	end
 end
@@ -1318,7 +1445,7 @@ gachaResultRemote.OnClientEvent:Connect(function(results: table)
 end)
 
 -- ============================================================
--- PANEL SWITCHING LOGIC  (home grid + detail panels)
+-- PANEL SWITCHING LOGIC
 -- ============================================================
 
 local panels = {
@@ -1332,28 +1459,23 @@ local function setTabActive(key: string | nil)
 	for k, info in pairs(tabButtons) do
 		local isActive = (k == key)
 		info.indicator.Visible = isActive
-		info.container.BackgroundTransparency = isActive and 0 or 0.4
-		info.container.BackgroundColor3       = isActive and C.ACCENT or C.TAB_BG
-		info.label.TextColor3 = isActive and C.WHITE or Color3.fromRGB(180, 182, 195)
+		info.label.TextColor3 = isActive and C.ACCENT or C.TEXTSUB
+		info.label.Font = isActive and Enum.Font.GothamBold or Enum.Font.Gotham
 	end
 end
 
 local function openPanel(key: string)
-	if activePanel == key then
-		return
-	end
+	if activePanel == key then return end
 	activePanel = key
 	for k, p in pairs(panels) do
 		p.frame.Visible = (k == key)
 	end
 	setTabActive(key)
-
 	if key == "inventory" then
 		buildTowerListEntries()
 	end
 end
 
--- Grid tile click handlers → navigate to detail panels
 invTileBtn.MouseButton1Click:Connect(function()      openPanel("inventory") end)
 gachaTileBtn.MouseButton1Click:Connect(function()    openPanel("gacha")     end)
 dailyTileBtn.MouseButton1Click:Connect(function()
@@ -1370,29 +1492,23 @@ challengeTileBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ============================================================
--- SLIDE ANIMATION  +  CAMERA MANIPULATION
+-- SLIDE ANIMATION + CAMERA
 -- ============================================================
 
 local camera = Workspace.CurrentCamera
 local originalCameraType = nil
 local originalCameraCF   = nil
 
-local SLIDE_TIME = 0.5
+local SLIDE_TIME = 0.45
 local TWEEN_INFO = TweenInfo.new(SLIDE_TIME, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 
 local function slideOpen()
 	panelOpen = true
 	arrowBtn.Text = "▼"
 
-	-- Tween the panel from off-screen to centre
-	local targetPos = UDim2.new(0.5, 0, 0.5, 0)
-	TweenService:Create(mainPanel, TWEEN_INFO, { Position = targetPos }):Play()
+	TweenService:Create(mainPanel, TWEEN_INFO, { Position = UDim2.new(0.5, 0, 0.5, 0) }):Play()
+	TweenService:Create(arrowBtn, TWEEN_INFO, { Position = UDim2.new(0.5, -36, 0.14, -20) }):Play()
 
-	-- Move arrow alongside
-	local arrowTarget = UDim2.new(0.5, -30, 0.14, -20)
-	TweenService:Create(arrowBtn, TWEEN_INFO, { Position = arrowTarget }):Play()
-
-	-- Camera: swing to the side so the character is visible next to the panel
 	originalCameraType = camera.CameraType
 	originalCameraCF   = camera.CFrame
 
@@ -1426,7 +1542,7 @@ local function slideClose()
 	arrowBtn.Text = "▲"
 
 	TweenService:Create(mainPanel, TWEEN_INFO, { Position = UDim2.new(0.5, 0, 1.5, 0) }):Play()
-	TweenService:Create(arrowBtn, TWEEN_INFO, { Position = UDim2.new(0.5, -30, 1, -36) }):Play()
+	TweenService:Create(arrowBtn, TWEEN_INFO, { Position = UDim2.new(0.5, -36, 1, -40) }):Play()
 
 	if originalCameraType then
 		local character = player.Character
@@ -1451,26 +1567,20 @@ local function slideClose()
 end
 
 local function togglePanel()
-	if panelOpen then
-		slideClose()
-	else
-		slideOpen()
-	end
+	if panelOpen then slideClose() else slideOpen() end
 end
 
 arrowBtn.MouseButton1Click:Connect(togglePanel)
 
 for key, info in pairs(tabButtons) do
 	info.button.MouseButton1Click:Connect(function()
-		if not panelOpen then
-			slideOpen()
-		end
+		if not panelOpen then slideOpen() end
 		openPanel(key)
 	end)
 end
 
 -- ============================================================
--- CURRENCY UPDATE HANDLER
+-- CURRENCY UPDATE
 -- ============================================================
 
 local function formatNumber(n: number): string
@@ -1501,9 +1611,7 @@ local function updateToggleBtn(state: string)
 	if state == "InRound" then
 		toggleBtn.Text = "⏹ STOP"
 		toggleBtn.BackgroundColor3 = C.RED
-		if panelOpen then
-			slideClose()
-		end
+		if panelOpen then slideClose() end
 		arrowBtn.Visible = false
 		activePanel = nil
 		setTabActive(nil)
