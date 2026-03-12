@@ -61,6 +61,18 @@ TowerData.Towers = {
 		gachaBanner      = "standard",
 		imageId          = "",
 	},
+
+	Wanderer = {
+		displayName      = "Wanderer",
+		rarity           = "LEGENDARY",
+		description      = "A recon specialist who deploys an MQ-9 Combat Drone to engage enemies from a distance. The drone can be repositioned to lay suppressing fire, and Reconnaissance mode unlocks devastating high-calibre shots.",
+		role             = "Global Support",
+		equipmentSlots   = 3,
+		lockedByDefault  = true,
+		bannerWeight     = 5,
+		gachaBanner      = "standard",
+		imageId          = "",
+	},
 }
 
 -- ============================================================
@@ -126,7 +138,7 @@ TowerData.Banners = {
 		costPerPull        = 160,     -- Gems per single pull
 		coinCostPerPull    = 1000,    -- Coins per single pull (no pity)
 		pityAt             = 70,
-		pools              = { "Warrior", "Deadeye", "Vitalist" },
+		pools              = { "Warrior", "Deadeye", "Vitalist", "Wanderer" },
 		rateUpTower        = nil,
 		rateUpChance       = 0,
 		rateUpRotationSec  = 0,
@@ -137,7 +149,7 @@ TowerData.Banners = {
 		costPerPull        = 160,     -- Gems per single pull
 		coinCostPerPull    = 1000,    -- Coins per single pull (no pity)
 		pityAt             = 70,
-		pools              = { "Warrior", "Deadeye", "Vitalist" },
+		pools              = { "Warrior", "Deadeye", "Vitalist", "Wanderer" },
 		rateUpTower        = "Deadeye",  -- default starting Rate-Up (server overrides hourly)
 		rateUpChance       = 0.50,    -- 50 % of EPIC+ pulls guaranteed to be the Rate-Up
 		rateUpRotationSec  = 3600,

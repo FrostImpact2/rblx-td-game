@@ -25,6 +25,7 @@ if not TowerStats then error("[TowerManager] Could not find TowerStats!") end
 local Warrior   = require(script.Parent:WaitForChild("Towers"):WaitForChild("Warrior",   10))
 local Deadeye   = require(script.Parent:WaitForChild("Towers"):WaitForChild("Deadeye",   10))
 local Vitalist  = require(script.Parent:WaitForChild("Towers"):WaitForChild("Vitalist",  10))
+local Wanderer  = require(script.Parent:WaitForChild("Towers"):WaitForChild("Wanderer",  10))
 
 -- Enemy modules
 local BasicZombie = require(script.Parent:WaitForChild("Enemies"):WaitForChild("BasicZombie", 10))
@@ -42,6 +43,7 @@ local function getTowerModule(tower: Model)
 	local tt = tower:GetAttribute("TowerType")
 	if tt == "Deadeye"  then return Deadeye  end
 	if tt == "Vitalist" then return Vitalist end
+	if tt == "Wanderer" then return Wanderer end
 	return Warrior
 end
 
@@ -518,6 +520,8 @@ local function registerTower(towerModel: Model)
 		Deadeye.InitTower(towerModel)
 	elseif tt == "Vitalist" then
 		Vitalist.InitTower(towerModel)
+	elseif tt == "Wanderer" then
+		Wanderer.InitTower(towerModel)
 	end
 	activeTowers[towerModel] = { lastAttackTime = 0 }
 end
@@ -612,6 +616,47 @@ RunService.Heartbeat:Connect(function()
 				end
 				continue
 			end
+		end
+
+		-- ══════════════════════════════════════════════════════
+		-- WANDERER combat branch
+		-- Uses the Drone's position for targeting.  All logic is
+		-- self-contained so the shared `target` variable is not used.
+		-- ══════════════════════════════════════════════════════
+		if towerType == "Wanderer" then
+			-- Tick passive systems
+			Wanderer.TickDroneRespawn(tower)
+			Wanderer.TickReconnaissance(tower)
+			Wanderer.TickSuppressingFire(tower, enemiesFolder, damageIndicatorRemote)
+
+			local dronePos = Wanderer.GetDronePosition(tower)
+			if not dronePos then
+				-- Drone is respawning – idle animation
+				Wanderer.UpdateCombatState(tower, false, nil)
+				tower:SetAttribute("State", "Idle")
+				continue
+			end
+
+			-- Find nearest enemy using the Drone's position
+			local rng             = tower:GetAttribute("RNG")     or 35
+			local wandererAtkSpd  = tower:GetAttribute("ATK_SPD") or 0.8
+			local droneTarget     = findNearestEnemy(dronePos, rng)
+
+			if not droneTarget then
+				Wanderer.UpdateCombatState(tower, false, nil)
+				tower:SetAttribute("State", "Idle")
+				continue
+			end
+
+			Wanderer.UpdateCombatState(tower, true, droneTarget)
+
+			if not Wanderer.IsReadyToFire(tower) then continue end
+			if now - data.lastAttackTime < 1 / wandererAtkSpd then continue end
+
+			tower:SetAttribute("State", "Attacking")
+			data.lastAttackTime = now
+			Wanderer.DoAttack(tower, droneTarget, enemiesFolder)
+			continue
 		end
 
 		if not target then
@@ -893,6 +938,8 @@ placeRemote.OnServerEvent:Connect(function(player: Player, templateName: string,
 		towerModel = Deadeye.CreateModel(position, TowerStats)
 	elseif templateName == "Vitalist" then
 		towerModel = Vitalist.CreateModel(position, TowerStats)
+	elseif templateName == "Wanderer" then
+		towerModel = Wanderer.CreateModel(position, TowerStats)
 	else
 		towerModel = Warrior.CreateModel(position, TowerStats, Warrior.LEAP_RANGE_MULT, Warrior.LEAP_SLASH_COOLDOWN)
 	end
@@ -912,7 +959,13 @@ moveRemote.OnServerEvent:Connect(function(player: Player, tower: Model, dest: Ve
 	if (tower:GetAttribute("Owner") or "") ~= player.Name then return end
 	if (tower:GetAttribute("State") or "Idle") == "Leaping" then return end
 
-	moveTower(tower, dest)
+	local towerType = tower:GetAttribute("TowerType")
+	if towerType == "Wanderer" then
+		-- For Wanderer: move the Drone, not the tower itself
+		Wanderer.MoveDrone(tower, dest)
+	else
+		moveTower(tower, dest)
+	end
 end)
 
 -- ============================================================
@@ -953,6 +1006,10 @@ strikeSkillRemote.OnServerEvent:Connect(function(player: Player, tower: Model, s
 			end
 		end
 		Vitalist.FireNanoBlast(tower, flatDir, enemiesFolder, towersFolder)
+
+	elseif skillName == "Reconnaissance" and towerType == "Wanderer" then
+		if not Wanderer.IsReconReady(tower) then return end
+		Wanderer.ActivateReconnaissance(tower)
 	end
 end)
 
