@@ -49,6 +49,7 @@ local towerBarAttachments = {}
 local PLACE_KEY_DEADEYE  = Enum.KeyCode.T
 local PLACE_KEY_WARRIOR  = Enum.KeyCode.U
 local PLACE_KEY_VITALIST = Enum.KeyCode.Y
+local PLACE_KEY_WANDERER = Enum.KeyCode.I
 local STRIKE_SKILL_KEY   = Enum.KeyCode.Q
 local GHOST_TRANSPARENCY = 0.5
 local VALID_COLOR        = Color3.fromRGB(100, 255, 100)
@@ -62,6 +63,7 @@ local TOWER_RANGE_STUDS = {
 	Warrior  = 8,
 	Deadeye  = 30,
 	Vitalist = 20,
+	Wanderer = 35,
 }
 
 -- ============================================================
@@ -301,6 +303,24 @@ local TOWER_PANEL_DATA = {
 		upgradeName  = "Combat Training",
 		level        = 0,
 		maxLevel     = 3,
+	},
+	Wanderer = {
+		displayName  = "Wanderer",
+		sellValue    = 250,
+		upgradeCost  = 6000,
+		upgradeLines = {
+			"+4 ATK, +5 Range (drone)",
+			"Suppressing Fire radius +2, duration +2s",
+			"Reconnaissance: +3s duration, High Caliber damage +0.5×",
+		},
+		upgradeName  = "Advanced Drone Package",
+		level        = 0,
+		maxLevel     = 3,
+		strikeSkill  = {
+			name    = "RECONNAISSANCE  [Q]",
+			desc    = "Drone pulses green light for 6s. Wanderer targets enemies in drone range, firing High Caliber (1.5× ATK) instead of Heavy Rounds. 20s cooldown.",
+			skillId = "Reconnaissance",
+		},
 	},
 }
 
@@ -963,6 +983,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		startPlacing("Vitalist")
 	elseif input.KeyCode == PLACE_KEY_WARRIOR then
 		startPlacing("Warrior")
+	elseif input.KeyCode == PLACE_KEY_WANDERER then
+		startPlacing("Wanderer")
 
 	elseif input.KeyCode == STRIKE_SKILL_KEY then
 		if strikeAiming   then stopStrikeAiming();   return end
@@ -976,6 +998,9 @@ UserInputService.InputBegan:Connect(function(input, processed)
 			startStrikeAiming(selectedTowerModel)
 		elseif towerType == "Vitalist" then
 			startVitalistAiming(selectedTowerModel)
+		elseif towerType == "Wanderer" then
+			-- Reconnaissance: fire-and-forget, no aiming needed
+			strikeSkillRemote:FireServer(selectedTowerModel, "Reconnaissance", Vector3.zero)
 		end
 	end
 end)

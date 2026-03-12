@@ -51,6 +51,21 @@ TowerStats.Templates = {
 		AttackDesc   = "Fires 8-bullet bursts (0.125× ATK each). ATK: damages enemy. SUPP: heals ally tower. At 40 charge: Nano Blast (2× AP laser).",
 		DamageMulti  = 1.0,
 	},
+
+	Wanderer = {
+		ATK      = 18,    -- drone Heavy Rounds: 0.5× ATK × 2 shots = 1.0× per trigger
+		AP       = 20,    -- High Caliber during Recon: 1.5× ATK
+		ATK_SPD  = 0.8,   -- drone attack triggers per second
+		RNG      = 35,    -- drone movement range AND attack range
+		HP       = 85,
+		MOVE_SPD = 20,    -- drone travel speed (studs/s)
+
+		-- Attack info
+		AttackType   = "Ranged",
+		AttackName   = "HEAVY ROUNDS",
+		AttackDesc   = "Drone fires bursts of 2 (0.5× ATK each). During Reconnaissance: Wanderer fires High Caliber (1.5× ATK).",
+		DamageMulti  = 1.0,
+	},
 }
 
 return TowerStats
