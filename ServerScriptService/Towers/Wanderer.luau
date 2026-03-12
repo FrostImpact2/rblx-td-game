@@ -861,7 +861,7 @@ function Wanderer.CreateModel(position: Vector3, TowerStats: any): Model?
 	circle.Size      = Vector3.new(0.15, rangeStuds * 2, rangeStuds * 2)
 	circle.Anchored  = true
 	circle.CanCollide = false
-	circle.Color     = Color3.fromRGB(30, 140, 60)
+	circle.Color     = Color3.fromRGB(30, 120, 215)
 	circle.Transparency = 1
 	circle.Material  = Enum.Material.SmoothPlastic
 	circle.Parent    = model

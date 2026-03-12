@@ -56,7 +56,7 @@ TowerStats.Templates = {
 		ATK      = 18,    -- drone Heavy Rounds: 0.5× ATK × 2 shots = 1.0× per trigger
 		AP       = 20,    -- High Caliber during Recon: 1.5× ATK
 		ATK_SPD  = 0.8,   -- drone attack triggers per second
-		RNG      = 35,    -- drone movement range AND attack range
+		RNG      = 60,    -- drone movement range AND attack range
 		HP       = 85,
 		MOVE_SPD = 20,    -- drone travel speed (studs/s)
 
