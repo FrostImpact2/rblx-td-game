@@ -195,8 +195,16 @@ local function buildDroneModel(position: Vector3): Model
 	if template then
 		local m = template:Clone()
 		m.Name = "Drone"
-		if m.PrimaryPart then
-			m.PrimaryPart.Anchored = true
+		-- Anchor ALL parts so the drone floats and gravity cannot pull any piece down
+		for _, desc in ipairs(m:GetDescendants()) do
+			if desc:IsA("BasePart") then
+				desc.Anchored   = true
+				desc.CanCollide = false
+			end
+		end
+		-- Guarantee a PrimaryPart so position queries and PivotTo work correctly
+		if not m.PrimaryPart then
+			m.PrimaryPart = m:FindFirstChildOfClass("BasePart")
 		end
 		m:PivotTo(CFrame.new(position))
 		return m
@@ -884,7 +892,11 @@ end
 function Wanderer.InitTower(tower: Model)
 	local st = getAnimState(tower)
 
-	-- Play deploy animation, then spawn drone, then go idle
+	-- Spawn drone immediately so it is always live regardless of animation state
+	spawnDrone(tower)
+	st.gunState = "idle"
+
+	-- Play deploy animation for visual effect (fire-and-forget)
 	local animator = getOrCreateAnimator(tower)
 	if animator then
 		local deployTrack = loadAndPlay(animator, DEPLOY_ANIM_ID, false, Enum.AnimationPriority.Action4, 0.1)
@@ -892,19 +904,12 @@ function Wanderer.InitTower(tower: Model)
 			task.spawn(function()
 				deployTrack.Stopped:Wait()
 				if not tower or not tower.Parent then return end
-				-- Spawn drone after deploy
-				spawnDrone(tower)
-				-- Settle into idle
-				st.gunState = "idle"
 				playIdle(tower, st)
 			end)
 			return
 		end
 	end
 
-	-- Fallback if animation fails
-	spawnDrone(tower)
-	st.gunState = "idle"
 	playIdle(tower, st)
 end
 
@@ -916,10 +921,13 @@ end
 function Wanderer.GetDronePosition(tower: Model): Vector3?
 	if not droneAlive[tower] then return nil end
 	local drone = droneModels[tower]
-	if not drone or not drone.PrimaryPart or not drone.Parent then
-		return nil
+	if not drone or not drone.Parent then return nil end
+	if drone.PrimaryPart then
+		return drone.PrimaryPart.Position
 	end
-	return drone.PrimaryPart.Position
+	-- Fallback: use bounding box center when PrimaryPart is unset
+	local firstPart = drone:FindFirstChildOfClass("BasePart")
+	return firstPart and firstPart.Position or nil
 end
 
 -- Returns true while Reconnaissance is active.
@@ -1022,7 +1030,7 @@ function Wanderer.MoveDrone(tower: Model, dest: Vector3)
 		end
 
 		local step    = flat.Unit * speed * dt
-		local newPos  = cur + step
+		local newPos  = Vector3.new(cur.X + step.X, dest.Y, cur.Z + step.Z)
 		drone:PivotTo(CFrame.new(newPos))
 	end)
 	activeDroneMovements[tower] = conn
