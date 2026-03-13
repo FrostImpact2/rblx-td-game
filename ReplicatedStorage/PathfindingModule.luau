@@ -101,8 +101,23 @@ function PathfindingModule.StartMoving(
 
 		if distance < ARRIVE_THRESHOLD then
 			currentIndex = currentIndex + 1
+			-- After incrementing, (currentIndex - 1) is the waypoint we just arrived at –
+			-- store it as PathIndex so targeting can score enemies by path progress.
+			local lastPassed = currentIndex - 1
+			if lastPassed >= 1 then
+				enemyModel:SetAttribute("PathIndex", lastPassed)
+			end
+			-- Distance to next waypoint (for tie-breaking in First/Last targeting)
+			if currentIndex <= #waypoints then
+				local nextWp  = waypoints[currentIndex]
+				local nextFlat = Vector3.new(nextWp.X - currentPos.X, 0, nextWp.Z - currentPos.Z)
+				enemyModel:SetAttribute("PathNextDist", nextFlat.Magnitude)
+			end
 			return
 		end
+
+		-- Update PathNextDist continuously (distance to next waypoint)
+		enemyModel:SetAttribute("PathNextDist", distance)
 
 		local moveDir = flatDir.Unit
 		local step = moveDir * moveSpeed * dt

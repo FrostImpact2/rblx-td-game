@@ -12,9 +12,11 @@ local player    = Players.LocalPlayer
 local mouse     = player:GetMouse()
 local playerGui = player:WaitForChild("PlayerGui")
 
-local placeRemote       = ReplicatedStorage:WaitForChild("PlaceTower",   10)
-local moveRemote        = ReplicatedStorage:WaitForChild("MoveTower",    10)
-local strikeSkillRemote = ReplicatedStorage:WaitForChild("StrikeSkill",  10)
+local placeRemote           = ReplicatedStorage:WaitForChild("PlaceTower",       10)
+local moveRemote            = ReplicatedStorage:WaitForChild("MoveTower",        10)
+local strikeSkillRemote     = ReplicatedStorage:WaitForChild("StrikeSkill",      10)
+local sellTowerRemote       = ReplicatedStorage:WaitForChild("SellTower",        10)
+local setTargetModeRemote   = ReplicatedStorage:WaitForChild("SetTargetMode",    10)
 
 local towersFolder  = Workspace:WaitForChild("Towers",  15)
 local enemiesFolder = Workspace:WaitForChild("Enemies", 15)
@@ -63,7 +65,7 @@ local TOWER_RANGE_STUDS = {
 	Warrior  = 8,
 	Deadeye  = 30,
 	Vitalist = 20,
-	Wanderer = 35,
+	Wanderer = 60,
 }
 
 -- ============================================================
@@ -187,12 +189,13 @@ end
 -- ============================================================
 
 local function showTowerRange(towerModel: Model)
+	local torso = towerModel.PrimaryPart
+	local pos   = torso and torso.Position
+
 	local circle = towerModel:FindFirstChild("RangeCircle")
 	if circle then
 		circle.Transparency = 0.6
-		local torso = towerModel.PrimaryPart
-		if torso then
-			local pos = torso.Position
+		if pos then
 			circle.CFrame = CFrame.new(pos.X, pos.Y - 2.5, pos.Z) * CFrame.Angles(0, 0, math.rad(90))
 		end
 	end
@@ -201,11 +204,30 @@ local function showTowerRange(towerModel: Model)
 	if leapCircle then
 		local cdEnd = towerModel:GetAttribute("LeapSlashCooldown") or 0
 		leapCircle.Transparency = tick() >= cdEnd and 0.8 or 0.92
-		local torso = towerModel.PrimaryPart
-		if torso then
-			local pos = torso.Position
+		if pos then
 			leapCircle.CFrame = CFrame.new(pos.X, pos.Y - 2.6, pos.Z) * CFrame.Angles(0, 0, math.rad(90))
 		end
+	end
+
+	-- Vitalist protocol-switch range indicator (yellow, same as strike indicator)
+	local moveCircle = towerModel:FindFirstChild("MoveRangeCircle")
+	if moveCircle then
+		moveCircle.Transparency = 0.75
+		if pos then
+			moveCircle.CFrame = CFrame.new(pos.X, pos.Y - 2.6, pos.Z) * CFrame.Angles(0, 0, math.rad(90))
+		end
+	end
+
+	-- Wanderer drone range circle (follows the drone's current position)
+	local droneRangeCircle = towerModel:FindFirstChild("DroneRangeCircle")
+	if droneRangeCircle then
+		local droneModel = towerModel:FindFirstChild("Drone")
+		local dronePart  = droneModel and droneModel.PrimaryPart
+		if dronePart then
+			local dp = dronePart.Position
+			droneRangeCircle.CFrame = CFrame.new(dp.X, dp.Y - 5.5, dp.Z) * CFrame.Angles(0, 0, math.rad(90))
+		end
+		droneRangeCircle.Transparency = 0.65
 	end
 end
 
@@ -214,6 +236,10 @@ local function hideTowerRange(towerModel: Model)
 	if circle then circle.Transparency = 1 end
 	local leapCircle = towerModel:FindFirstChild("LeapRangeCircle")
 	if leapCircle then leapCircle.Transparency = 1 end
+	local moveCircle = towerModel:FindFirstChild("MoveRangeCircle")
+	if moveCircle then moveCircle.Transparency = 1 end
+	local droneRangeCircle = towerModel:FindFirstChild("DroneRangeCircle")
+	if droneRangeCircle then droneRangeCircle.Transparency = 1 end
 end
 
 -- ============================================================
@@ -549,6 +575,94 @@ local function createInfoGui(towerModel: Model)
 	sellBtn.TextSize         = 14
 	sellBtn.Parent           = panel
 	corner(sellBtn, 7)
+	sellBtn.MouseButton1Click:Connect(function()
+		if towerModel and towerModel.Parent then
+			sellTowerRemote:FireServer(towerModel)
+			deselectTower()
+		end
+	end)
+
+	-- Targeting mode cycling
+	local TARGET_MODES = { "First", "Last", "Strongest", "Weakest", "Random" }
+	local currentModeIdx = 1
+	local function getTargetModeIdx(mode)
+		for i, m in ipairs(TARGET_MODES) do if m == mode then return i end end
+		return 1
+	end
+	currentModeIdx = getTargetModeIdx(towerModel:GetAttribute("TargetMode") or "First")
+	local targetModeLbl = targetBox:FindFirstChild("TargetModeLabel", true)
+	if targetModeLbl then
+		targetModeLbl.Text = "Targets: " .. TARGET_MODES[currentModeIdx]
+	end
+	local targetClickBtn = Instance.new("TextButton")
+	targetClickBtn.Size             = UDim2.new(1, 0, 1, 0)
+	targetClickBtn.BackgroundTransparency = 1
+	targetClickBtn.Text             = ""
+	targetClickBtn.Parent           = targetBox
+	targetClickBtn.ZIndex           = 5
+	targetClickBtn.MouseButton1Click:Connect(function()
+		currentModeIdx = (currentModeIdx % #TARGET_MODES) + 1
+		local newMode = TARGET_MODES[currentModeIdx]
+		if targetModeLbl then
+			targetModeLbl.Text = "Targets: " .. newMode
+		end
+		if towerModel and towerModel.Parent then
+			setTargetModeRemote:FireServer(towerModel, newMode)
+		end
+	end)
+
+	-- ─── Cooldown bars ───────────────────────────────────────────
+	local CD_BAR_Y  = BTN_Y + BTN_H + 4
+	local CD_BAR_H  = 10
+	local CD_HALF_W = (PANEL_W - 24) / 2
+
+	-- Strike cooldown bar
+	local strikeCdBg = makeFrame(panel, {
+		Size             = UDim2.new(0, CD_HALF_W, 0, CD_BAR_H),
+		Position         = UDim2.new(0, 8, 0, CD_BAR_Y),
+		BackgroundColor3 = Color3.fromRGB(30, 30, 40),
+		ClipsDescendants = true,
+	})
+	corner(strikeCdBg, 4)
+	local strikeCdFill = makeFrame(strikeCdBg, {
+		Name             = "StrikeCDFill",
+		Size             = UDim2.new(0, 0, 1, 0),
+		BackgroundColor3 = Color3.fromRGB(255, 200, 50),
+	})
+	makeLabel(strikeCdBg, {
+		Name           = "StrikeCDLabel",
+		Size           = UDim2.new(1, 0, 1, 0),
+		Text           = "Strike CD",
+		TextColor3     = Color3.fromRGB(220, 220, 220),
+		Font           = Enum.Font.Gotham,
+		TextSize        = 9,
+	})
+
+	-- Move cooldown bar
+	local moveCdBg = makeFrame(panel, {
+		Size             = UDim2.new(0, CD_HALF_W, 0, CD_BAR_H),
+		Position         = UDim2.new(0, 8 + CD_HALF_W + 8, 0, CD_BAR_Y),
+		BackgroundColor3 = Color3.fromRGB(30, 30, 40),
+		ClipsDescendants = true,
+	})
+	corner(moveCdBg, 4)
+	local moveCdFill = makeFrame(moveCdBg, {
+		Name             = "MoveCDFill",
+		Size             = UDim2.new(0, 0, 1, 0),
+		BackgroundColor3 = Color3.fromRGB(50, 180, 255),
+	})
+	makeLabel(moveCdBg, {
+		Name           = "MoveCDLabel",
+		Size           = UDim2.new(1, 0, 1, 0),
+		Text           = "Move CD",
+		TextColor3     = Color3.fromRGB(220, 220, 220),
+		Font           = Enum.Font.Gotham,
+		TextSize        = 9,
+	})
+
+	-- Store references on the panel for the update loop
+	strikeCdFill.Name = "StrikeCDFill"
+	moveCdFill.Name   = "MoveCDFill"
 
 	local STATS_Y = PANEL_H - 46
 	local statsBar = makeFrame(panel, {
@@ -805,6 +919,26 @@ RunService.RenderStepped:Connect(function(dt)
 				local newAtk   = tostring(selectedTowerModel:GetAttribute("ATK") or 0)
 				local expected = "DMG: " .. newAtk
 				if dmgLabel.Text ~= expected then dmgLabel.Text = expected end
+			end
+
+			-- Update Strike cooldown bar
+			local strikeFill = panel:FindFirstChild("StrikeCDFill", true)
+			if strikeFill then
+				local cdEnd = selectedTowerModel:GetAttribute("StrikeCooldownEnd") or 0
+				local cdMax = selectedTowerModel:GetAttribute("StrikeCooldownMax") or 1
+				local remaining = math.max(0, cdEnd - tick())
+				local fraction  = cdMax > 0 and math.clamp(remaining / cdMax, 0, 1) or 0
+				strikeFill.Size = UDim2.new(fraction, 0, 1, 0)
+			end
+
+			-- Update Move cooldown bar
+			local moveFill = panel:FindFirstChild("MoveCDFill", true)
+			if moveFill then
+				local cdEnd = selectedTowerModel:GetAttribute("MoveCooldownEnd") or 0
+				local cdMax = selectedTowerModel:GetAttribute("MoveCooldownMax") or 1
+				local remaining = math.max(0, cdEnd - tick())
+				local fraction  = cdMax > 0 and math.clamp(remaining / cdMax, 0, 1) or 0
+				moveFill.Size = UDim2.new(fraction, 0, 1, 0)
 			end
 		end
 	elseif selectedTowerModel and not selectedTowerModel.Parent then

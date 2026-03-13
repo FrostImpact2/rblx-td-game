@@ -846,6 +846,18 @@ function Vitalist.CreateModel(position: Vector3, TowerStats: any): Model?
 	circle.Material     = Enum.Material.SmoothPlastic
 	circle.Parent       = model
 
+	-- Protocol-switch range circle (shown when tower is selected; yellow = skill indicator)
+	local moveCircle = Instance.new("Part")
+	moveCircle.Name         = "MoveRangeCircle"
+	moveCircle.Shape        = Enum.PartType.Cylinder
+	moveCircle.Size         = Vector3.new(0.1, Vitalist.PROTOCOL_SWITCH_RANGE * 2, Vitalist.PROTOCOL_SWITCH_RANGE * 2)
+	moveCircle.Anchored     = true
+	moveCircle.CanCollide   = false
+	moveCircle.Color        = Color3.fromRGB(255, 200, 50)
+	moveCircle.Transparency = 1
+	moveCircle.Material     = Enum.Material.Neon
+	moveCircle.Parent       = model
+
 	model:SetAttribute("ATK",         template.ATK)
 	model:SetAttribute("AP",          template.AP)
 	model:SetAttribute("ATK_SPD",     template.ATK_SPD)
@@ -867,7 +879,7 @@ function Vitalist.CreateModel(position: Vector3, TowerStats: any): Model?
 	-- Sit the model exactly on the ground by measuring the lowest non-decorative part
 	local lowestY = math.huge
 	for _, part in ipairs(model:GetDescendants()) do
-		if part:IsA("BasePart") and part.Name ~= "RangeCircle" then
+		if part:IsA("BasePart") and part.Name ~= "RangeCircle" and part.Name ~= "MoveRangeCircle" then
 			lowestY = math.min(lowestY, part.Position.Y - part.Size.Y / 2)
 		end
 	end
@@ -878,6 +890,8 @@ function Vitalist.CreateModel(position: Vector3, TowerStats: any): Model?
 
 	local finalPos = model.PrimaryPart and model.PrimaryPart.Position or position
 	circle.CFrame = CFrame.new(finalPos.X, finalPos.Y - 2.5, finalPos.Z)
+		* CFrame.Angles(0, 0, math.rad(90))
+	moveCircle.CFrame = CFrame.new(finalPos.X, finalPos.Y - 2.6, finalPos.Z)
 		* CFrame.Angles(0, 0, math.rad(90))
 
 	return model
@@ -1220,6 +1234,8 @@ function Vitalist.FireNanoBlast(
 
 	-- Record use time
 	nanoblastLastFire[tower] = tick()
+	tower:SetAttribute("StrikeCooldownEnd", tick() + Vitalist.NANO_BLAST_COOLDOWN)
+	tower:SetAttribute("StrikeCooldownMax", Vitalist.NANO_BLAST_COOLDOWN)
 
 	-- Reset charge immediately on fire
 	tower:SetAttribute("Charge", 0)
