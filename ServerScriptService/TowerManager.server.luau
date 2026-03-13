@@ -35,6 +35,8 @@ local damageIndicatorRemote      = Instance.new("RemoteEvent")
 damageIndicatorRemote.Name       = "ShowDamageIndicator"
 damageIndicatorRemote.Parent     = ReplicatedStorage
 
+local activeMovements = {}
+
 -- ============================================================
 -- TOWER-MODULE ROUTER
 -- ============================================================

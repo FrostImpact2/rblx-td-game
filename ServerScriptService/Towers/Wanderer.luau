@@ -303,62 +303,6 @@ end
 -- DRONE MANAGEMENT
 -- ============================================================
 
-local function spawnDrone(tower: Model)
-	local torso = tower.PrimaryPart
-	if not torso then return end
-
-	-- Remove existing drone if any
-	local existing = droneModels[tower]
-	if existing and existing.Parent then existing:Destroy() end
-
-	local spawnPos = torso.Position
-	local drone    = buildDroneModel(spawnPos + Vector3.new(0, 3, 2))
-	if not drone then
-		warn("[Wanderer] Failed to build drone model")
-		return
-	end
-
-	drone.Parent   = tower
-
-	droneModels[tower] = drone
-	droneAlive[tower]  = (drone.PrimaryPart ~= nil)
-
-	-- Play summon animation on Wanderer
-	local st = getAnimState(tower)
-	local animator = getOrCreateAnimator(tower)
-	if animator then
-		local summonTrack = loadAndPlay(
-			animator, SUMMON_ANIM_ID, false,
-			Enum.AnimationPriority.Action3, 0.1
-		)
-		-- Return to idle after summon anim finishes
-		if summonTrack then
-			task.spawn(function()
-				summonTrack.Stopped:Wait()
-				if tower and tower.Parent and st.gunState ~= "walking" then
-					st.gunState = "idle"
-					-- idle will be kicked by UpdateCombatState
-				end
-			end)
-		end
-	end
-
-	-- Green pulse VFX showing the drone is active
-	local dronePart = drone.PrimaryPart
-	if dronePart then
-		local light = Instance.new("PointLight")
-		light.Brightness = 2
-		light.Color      = Color3.fromRGB(80, 230, 100)
-		light.Range      = 8
-		light.Parent     = dronePart
-
-		-- Fade light in and out once
-		TweenService:Create(light, TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, 2, true), { Brightness = 0.2 }):Play()
-		task.delay(1.5, function()
-			if light and light.Parent then light:Destroy() end
-		end)
-	end
-end
 
 -- ============================================================
 -- DRONE MANAGEMENT
@@ -380,7 +324,7 @@ local function spawnDrone(tower: Model)
 	droneAlive[tower]  = true
 
 	-- DroneRangeCircle: shows where the drone can currently shoot enemies
-	local droneRng = tower:GetAttribute("RNG") or 60
+	local droneRng = tower:GetAttribute("RNG") / 3
 	local existingDrc = tower:FindFirstChild("DroneRangeCircle")
 	if existingDrc then existingDrc:Destroy() end
 	local drc        = Instance.new("Part")
@@ -389,7 +333,7 @@ local function spawnDrone(tower: Model)
 	drc.Size         = Vector3.new(0.12, droneRng * 2, droneRng * 2)
 	drc.Anchored     = true
 	drc.CanCollide   = false
-	drc.Color        = Color3.fromRGB(60, 200, 255)
+	drc.Color        = Color3.fromRGB(56, 69, 255)
 	drc.Transparency = 1
 	drc.Material     = Enum.Material.Neon
 	local dp = drone.PrimaryPart
@@ -572,7 +516,7 @@ local function startReconPulse(tower: Model)
 			return
 		end
 
-		local range = tower:GetAttribute("RNG") or 60
+		local range = tower:GetAttribute("RNG") / 3
 
 		-- Expanding ring pulse
 		local ring     = Instance.new("Part")
@@ -618,7 +562,7 @@ local function spawnSuppressingZone(position: Vector3): Part
 	zone.Anchored    = true
 	zone.CanCollide  = false
 	zone.CastShadow  = false
-	zone.CFrame      = CFrame.new(position.X, position.Y - 2.5, position.Z)
+	zone.CFrame      = CFrame.new(position.X, position.Y - 5, position.Z)
 		* CFrame.Angles(0, 0, math.rad(90))
 	zone.Parent      = Workspace
 
