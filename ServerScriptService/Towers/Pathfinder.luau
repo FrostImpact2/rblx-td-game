@@ -1004,7 +1004,7 @@ local function collectAllSouls(tower: Model): { { pos: Vector3, vfx: Part? } }
 	return souls
 end
 
-local function damageAlongPath(fromPos, toPos, damage, enemiesFolder, hit)
+local function damageAlongPath(fromPos: Vector3, toPos: Vector3, damage: number, enemiesFolder: Folder, hit: {[Model]: boolean})
 	local dir  = toPos - fromPos
 	local dist = dir.Magnitude
 	if dist < 0.1 then return hit end
