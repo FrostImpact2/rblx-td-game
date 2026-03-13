@@ -70,6 +70,14 @@ local strikeSkillRemote  = Instance.new("RemoteEvent")
 strikeSkillRemote.Name   = "StrikeSkill"
 strikeSkillRemote.Parent = ReplicatedStorage
 
+local sellTowerRemote    = Instance.new("RemoteEvent")
+sellTowerRemote.Name     = "SellTower"
+sellTowerRemote.Parent   = ReplicatedStorage
+
+local setTargetModeRemote = Instance.new("RemoteEvent")
+setTargetModeRemote.Name  = "SetTargetMode"
+setTargetModeRemote.Parent = ReplicatedStorage
+
 local playEnemyPunchRemote = ReplicatedStorage:WaitForChild("PlayEnemyPunch", 10)
 
 local pathFolder      = Workspace:WaitForChild("Path", 10)
@@ -229,18 +237,88 @@ end
 
 -- ============================================================
 -- TARGETING
+-- Unified targeting helper. Modes: "First", "Last", "Strongest", "Weakest", "Random"
 -- ============================================================
 
-local function findNearestEnemy(pos: Vector3, range: number, searchFolder: Folder?): Model?
-	local folder         = searchFolder or enemiesFolder
-	local best, bestDist = nil, math.huge
-	for _, e in ipairs(folder:GetChildren()) do
+-- Get enemies in range at a given position
+local function getEnemiesInRange(pos: Vector3, range: number, folder: Folder?): {Model}
+	local result = {}
+	for _, e in ipairs((folder or enemiesFolder):GetChildren()) do
 		if e:IsA("Model") and e.PrimaryPart and (e:GetAttribute("HP") or 0) > 0 then
-			local d = (e.PrimaryPart.Position - pos).Magnitude
-			if d <= range and d < bestDist then bestDist = d; best = e end
+			if (e.PrimaryPart.Position - pos).Magnitude <= range then
+				table.insert(result, e)
+			end
 		end
 	end
-	return best
+	return result
+end
+
+-- Score each enemy for "First" targeting:
+-- higher score = closer to the end of the path.
+-- Uses PathIndex attribute (last waypoint index passed) + fraction toward next waypoint.
+local function getProgressScore(enemy: Model): number
+	local pathIndex = enemy:GetAttribute("PathIndex") or 0
+	local nextDist  = enemy:GetAttribute("PathNextDist") or math.huge
+	return pathIndex - nextDist * 0.001   -- weight: higher index wins, ties broken by proximity
+end
+
+local function findTargetByMode(
+	pos: Vector3,
+	range: number,
+	mode: string,
+	folder: Folder?
+): Model?
+	local enemies = getEnemiesInRange(pos, range, folder)
+	if #enemies == 0 then return nil end
+
+	if mode == "First" then
+		local best, bestScore = nil, -math.huge
+		for _, e in ipairs(enemies) do
+			local s = getProgressScore(e)
+			if s > bestScore then bestScore = s; best = e end
+		end
+		return best
+
+	elseif mode == "Last" then
+		local best, bestScore = nil, math.huge
+		for _, e in ipairs(enemies) do
+			local s = getProgressScore(e)
+			if s < bestScore then bestScore = s; best = e end
+		end
+		return best
+
+	elseif mode == "Strongest" then
+		local best, bestHP = nil, -math.huge
+		for _, e in ipairs(enemies) do
+			local hp = e:GetAttribute("HP") or 0
+			if hp > bestHP then bestHP = hp; best = e end
+		end
+		return best
+
+	elseif mode == "Weakest" then
+		local best, bestHP = nil, math.huge
+		for _, e in ipairs(enemies) do
+			local hp = e:GetAttribute("HP") or 0
+			if hp < bestHP then bestHP = hp; best = e end
+		end
+		return best
+
+	elseif mode == "Random" then
+		return enemies[math.random(1, #enemies)]
+
+	else
+		-- Default: "First"
+		local best, bestScore = nil, -math.huge
+		for _, e in ipairs(enemies) do
+			local s = getProgressScore(e)
+			if s > bestScore then bestScore = s; best = e end
+		end
+		return best
+	end
+end
+
+local function findNearestEnemy(pos: Vector3, range: number, searchFolder: Folder?): Model?
+	return findTargetByMode(pos, range, "First", searchFolder)
 end
 
 local function findTarget(tower: Model): Model?
@@ -248,6 +326,7 @@ local function findTarget(tower: Model): Model?
 	if not torso then return nil end
 	local range = tower:GetAttribute("RNG") or 8
 	local pos   = torso.Position
+	local mode  = tower:GetAttribute("TargetMode") or "First"
 
 	local aggroed = aggroMap[tower]
 	if aggroed and aggroed.Parent and aggroed.PrimaryPart then
@@ -258,7 +337,7 @@ local function findTarget(tower: Model): Model?
 		end
 	end
 
-	return findNearestEnemy(pos, range)
+	return findTargetByMode(pos, range, mode)
 end
 
 local function isTowerInAttackRange(tower: Model, enemy: Model): boolean
@@ -337,13 +416,17 @@ local function updateCirclePositions(tower: Model, pos: Vector3)
 	if leapCircle and leapCircle.Parent then
 		leapCircle.CFrame = CFrame.new(pos.X, pos.Y - 2.6, pos.Z) * CFrame.Angles(0, 0, math.rad(90))
 	end
+	local moveCircle = tower:FindFirstChild("MoveRangeCircle")
+	if moveCircle and moveCircle.Parent then
+		moveCircle.CFrame = CFrame.new(pos.X, pos.Y - 2.6, pos.Z) * CFrame.Angles(0, 0, math.rad(90))
+	end
 end
 
 -- ============================================================
 -- TOWER MOVEMENT + RELENTLESS ADVANCE
 -- ============================================================
 
-local activeMovements = {}  -- tower -> RBXScriptConnection
+local TOWER_MOVE_COOLDOWN = 3  -- seconds after a tower moves before it can move again
 local moveIndicators  = {}  -- tower -> Part
 
 local function createMoveIndicator(dest: Vector3): Part
@@ -408,6 +491,8 @@ local function moveTower(tower: Model, dest: Vector3)
 
 	local mod = getTowerModule(tower)
 	tower:SetAttribute("State", "Moving")
+	tower:SetAttribute("MoveCooldownEnd", tick() + TOWER_MOVE_COOLDOWN)
+	tower:SetAttribute("MoveCooldownMax", TOWER_MOVE_COOLDOWN)
 	mod.StartWalk(tower)
 	moveIndicators[tower] = createMoveIndicator(dest)
 
@@ -638,7 +723,7 @@ RunService.Heartbeat:Connect(function()
 			end
 
 			-- Find nearest enemy using the Drone's position
-			local rng             = tower:GetAttribute("RNG")     or 35
+			local rng             = tower:GetAttribute("RNG")     or 60
 			local wandererAtkSpd  = tower:GetAttribute("ATK_SPD") or 0.8
 			local droneTarget     = findNearestEnemy(dronePos, rng)
 
@@ -1023,4 +1108,44 @@ towersFolder.ChildRemoved:Connect(function(child)
 		activeMovements[child] = nil
 	end
 	destroyMoveIndicator(child)
+end)
+
+-- ============================================================
+-- SELL TOWER REMOTE
+-- ============================================================
+
+sellTowerRemote.OnServerEvent:Connect(function(player: Player, tower: Model)
+	if not tower or not tower:IsA("Model")   then return end
+	if tower.Parent ~= towersFolder          then return end
+	if (tower:GetAttribute("Owner") or "") ~= player.Name then return end
+	local state = tower:GetAttribute("State") or "Idle"
+	if state == "Leaping" or state == "Moving" then return end
+
+	-- Reward sell value
+	local towerType = tower:GetAttribute("TowerType") or "Warrior"
+	local sellValues = {
+		Warrior  = 130,
+		Deadeye  = 165,
+		Vitalist = 155,
+		Wanderer = 250,
+	}
+	local coinsObj = ReplicatedStorage:FindFirstChild("Coins") or ReplicatedStorage:FindFirstChild("Gold")
+	if coinsObj and coinsObj:IsA("ValueBase") then
+		coinsObj.Value = (coinsObj.Value or 0) + (sellValues[towerType] or 0)
+	end
+
+	tower:Destroy()
+end)
+
+-- ============================================================
+-- SET TARGET MODE REMOTE
+-- ============================================================
+
+setTargetModeRemote.OnServerEvent:Connect(function(player: Player, tower: Model, mode: string)
+	if not tower or not tower:IsA("Model")   then return end
+	if tower.Parent ~= towersFolder          then return end
+	if (tower:GetAttribute("Owner") or "") ~= player.Name then return end
+	local valid = { First = true, Last = true, Strongest = true, Weakest = true, Random = true }
+	if not valid[mode] then return end
+	tower:SetAttribute("TargetMode", mode)
 end)

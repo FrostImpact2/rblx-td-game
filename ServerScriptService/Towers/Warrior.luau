@@ -338,7 +338,7 @@ function Warrior.CreateModel(position: Vector3, TowerStats: any, leapRangeMult: 
 	leapCircle.Size         = Vector3.new(0.1, leapRange * 2, leapRange * 2)
 	leapCircle.Anchored     = true
 	leapCircle.CanCollide   = false
-	leapCircle.Color        = Color3.fromRGB(30, 100, 200)
+	leapCircle.Color        = Color3.fromRGB(255, 200, 50)
 	leapCircle.Transparency = 1
 	leapCircle.Material     = Enum.Material.Neon
 	leapCircle.Parent       = model
@@ -474,6 +474,8 @@ end
 
 function Warrior.StartLeapSlashCooldown(tower: Model)
 	tower:SetAttribute("LeapSlashCooldown", tick() + Warrior.LEAP_SLASH_COOLDOWN)
+	tower:SetAttribute("MoveCooldownEnd",   tick() + Warrior.LEAP_SLASH_COOLDOWN)
+	tower:SetAttribute("MoveCooldownMax",   Warrior.LEAP_SLASH_COOLDOWN)
 end
 
 function Warrior.PerformLeapingSlash(

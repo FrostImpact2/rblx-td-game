@@ -92,6 +92,7 @@ local droneModels         = {}  -- tower → Drone Model (child of tower)
 local droneAlive          = {}  -- tower → boolean
 local droneRespawnAt      = {}  -- tower → tick() when drone respawns
 local activeDroneMovements= {}  -- tower → RBXScriptConnection
+local droneFloatTimers    = {}  -- tower → float animation timer (seconds)
 
 local reconActive         = {}  -- tower → boolean
 local reconEndAt          = {}  -- tower → tick() when Recon expires
@@ -378,6 +379,26 @@ local function spawnDrone(tower: Model)
 	droneModels[tower] = drone
 	droneAlive[tower]  = true
 
+	-- DroneRangeCircle: shows where the drone can currently shoot enemies
+	local droneRng = tower:GetAttribute("RNG") or 60
+	local existingDrc = tower:FindFirstChild("DroneRangeCircle")
+	if existingDrc then existingDrc:Destroy() end
+	local drc        = Instance.new("Part")
+	drc.Name         = "DroneRangeCircle"
+	drc.Shape        = Enum.PartType.Cylinder
+	drc.Size         = Vector3.new(0.12, droneRng * 2, droneRng * 2)
+	drc.Anchored     = true
+	drc.CanCollide   = false
+	drc.Color        = Color3.fromRGB(60, 200, 255)
+	drc.Transparency = 1
+	drc.Material     = Enum.Material.Neon
+	local dp = drone.PrimaryPart
+	if dp then
+		drc.CFrame = CFrame.new(dp.Position.X, dp.Position.Y - 5.5, dp.Position.Z)
+			* CFrame.Angles(0, 0, math.rad(90))
+	end
+	drc.Parent = tower
+
 	-- Play summon animation on Wanderer
 	local st = getAnimState(tower)
 	local animator = getOrCreateAnimator(tower)
@@ -412,7 +433,51 @@ local function spawnDrone(tower: Model)
 		task.delay(1.5, function()
 			if light and light.Parent then light:Destroy() end
 		end)
+
+		-- Persistent ambient hover light
+		local hoverLight = Instance.new("PointLight")
+		hoverLight.Name       = "HoverLight"
+		hoverLight.Brightness = 0.8
+		hoverLight.Color      = Color3.fromRGB(60, 200, 255)
+		hoverLight.Range      = 14
+		hoverLight.Parent     = dronePart
+
+		-- Hover particle attachment
+		local att = Instance.new("Attachment")
+		att.Name   = "HoverAtt"
+		att.Parent = dronePart
+		local hoverParticles = Instance.new("ParticleEmitter")
+		hoverParticles.Name          = "HoverParticles"
+		hoverParticles.Color         = ColorSequence.new(Color3.fromRGB(60, 220, 255))
+		hoverParticles.LightEmission = 1
+		hoverParticles.LightInfluence = 0
+		hoverParticles.Size          = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.12), NumberSequenceKeypoint.new(1, 0) })
+		hoverParticles.Transparency  = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.3), NumberSequenceKeypoint.new(1, 1) })
+		hoverParticles.Lifetime      = NumberRange.new(0.4, 0.8)
+		hoverParticles.Rate          = 8
+		hoverParticles.Speed         = NumberRange.new(0.5, 1.5)
+		hoverParticles.SpreadAngle   = Vector2.new(30, 30)
+		hoverParticles.Parent        = att
+
+		-- Movement speed-line particles (enabled in MoveDrone, disabled while idle)
+		local moveAtt = Instance.new("Attachment")
+		moveAtt.Name   = "MoveAtt"
+		moveAtt.Parent = dronePart
+		local moveParticles = Instance.new("ParticleEmitter")
+		moveParticles.Name          = "MoveParticles"
+		moveParticles.Color         = ColorSequence.new(Color3.fromRGB(120, 200, 255))
+		moveParticles.LightEmission = 1
+		moveParticles.LightInfluence = 0
+		moveParticles.Size          = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.08), NumberSequenceKeypoint.new(1, 0) })
+		moveParticles.Transparency  = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
+		moveParticles.Lifetime      = NumberRange.new(0.15, 0.3)
+		moveParticles.Rate          = 0   -- enabled only while moving
+		moveParticles.Speed         = NumberRange.new(3, 6)
+		moveParticles.SpreadAngle   = Vector2.new(160, 160)
+		moveParticles.Parent        = moveAtt
 	end
+
+	droneFloatTimers[tower] = 0
 end
 
 local function destroyDrone(tower: Model)
@@ -455,15 +520,20 @@ local function destroyDrone(tower: Model)
 		drone:Destroy()
 	end
 
-	droneModels[tower]   = nil
-	droneAlive[tower]    = false
-	droneRespawnAt[tower] = tick() + Wanderer.DRONE_RESPAWN_TIME
+	droneModels[tower]      = nil
+	droneAlive[tower]       = false
+	droneRespawnAt[tower]   = tick() + Wanderer.DRONE_RESPAWN_TIME
+	droneFloatTimers[tower] = nil
 
 	-- Cancel any active drone movement
 	if activeDroneMovements[tower] then
 		activeDroneMovements[tower]:Disconnect()
 		activeDroneMovements[tower] = nil
 	end
+
+	-- Remove DroneRangeCircle
+	local drc = tower:FindFirstChild("DroneRangeCircle")
+	if drc and drc.Parent then drc:Destroy() end
 end
 
 -- ============================================================
@@ -502,7 +572,7 @@ local function startReconPulse(tower: Model)
 			return
 		end
 
-		local range = tower:GetAttribute("RNG") or 35
+		local range = tower:GetAttribute("RNG") or 60
 
 		-- Expanding ring pulse
 		local ring     = Instance.new("Part")
@@ -1019,7 +1089,8 @@ local function faceDroneToward(tower: Model, worldPos: Vector3)
 	local flatDir = Vector3.new(worldPos.X - origin.X, 0, worldPos.Z - origin.Z)
 	if flatDir.Magnitude < 0.1 then return end
 
-	drone:PivotTo(CFrame.new(origin, origin + flatDir.Unit))
+	-- Flip 180° because the drone model's front face points backward
+	drone:PivotTo(CFrame.new(origin, origin + flatDir.Unit) * CFrame.Angles(0, math.pi, 0))
 end
 
 -- ============================================================
@@ -1035,7 +1106,7 @@ function Wanderer.MoveDrone(tower: Model, dest: Vector3)
 	if not torso then return end
 
 	-- Clamp destination to within Wanderer's RNG
-	local range = tower:GetAttribute("RNG") or 35
+	local range = tower:GetAttribute("RNG") or 60
 	local flatDiff = Vector3.new(dest.X - torso.Position.X, 0, dest.Z - torso.Position.Z)
 	if flatDiff.Magnitude > range then
 		local clamped = torso.Position + flatDiff.Unit * range
@@ -1104,6 +1175,14 @@ function Wanderer.MoveDrone(tower: Model, dest: Vector3)
 		activeDroneMovements[tower] = nil
 	end
 
+	-- Enable movement particles
+	local dronePrimary = drone.PrimaryPart
+	if dronePrimary then
+		local moveAtt = dronePrimary:FindFirstChild("MoveAtt")
+		local mp = moveAtt and moveAtt:FindFirstChildOfClass("ParticleEmitter")
+		if mp then mp.Rate = 35 end
+	end
+
 	-- Smoothly move drone to destination
 	local speed = Wanderer.DRONE_MOVE_SPEED
 	local conn
@@ -1122,6 +1201,13 @@ function Wanderer.MoveDrone(tower: Model, dest: Vector3)
 			conn:Disconnect()
 			activeDroneMovements[tower] = nil
 			drone:PivotTo(CFrame.new(dest))
+			-- Disable movement particles on arrival
+			local dp2 = drone.PrimaryPart
+			if dp2 then
+				local ma2 = dp2:FindFirstChild("MoveAtt")
+				local mp2 = ma2 and ma2:FindFirstChildOfClass("ParticleEmitter")
+				if mp2 then mp2.Rate = 0 end
+			end
 			return
 		end
 
@@ -1129,7 +1215,7 @@ function Wanderer.MoveDrone(tower: Model, dest: Vector3)
 		local newPos = Vector3.new(cur.X + step.X, dest.Y, cur.Z + step.Z)
 
 		if flat.Magnitude > 0.05 then
-			drone:PivotTo(CFrame.new(newPos, newPos + flat.Unit))
+			drone:PivotTo(CFrame.new(newPos, newPos + flat.Unit) * CFrame.Angles(0, math.pi, 0))
 		else
 			drone:PivotTo(CFrame.new(newPos))
 		end
@@ -1248,6 +1334,8 @@ function Wanderer.ActivateReconnaissance(tower: Model)
 	reconActive[tower]      = true
 	reconEndAt[tower]       = now + Wanderer.RECON_DURATION
 	reconCooldownEnd[tower] = now + Wanderer.RECON_COOLDOWN
+	tower:SetAttribute("StrikeCooldownEnd", now + Wanderer.RECON_COOLDOWN)
+	tower:SetAttribute("StrikeCooldownMax", Wanderer.RECON_COOLDOWN)
 
 	-- Visual pulse from drone
 	startReconPulse(tower)

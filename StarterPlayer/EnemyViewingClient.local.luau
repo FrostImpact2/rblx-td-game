@@ -64,11 +64,11 @@ local function updateAttachmentPosition(enemyModel: Model)
 	local root = enemyModel.PrimaryPart
 	if not root then return end
 
-	-- Cache local offset on first computation; model geometry doesn't change
+	-- Use a fixed local offset above the HumanoidRootPart so the bar
+	-- always appears over the enemy's head regardless of spawn timing.
+	-- (3.5 studs up from HRP centre covers standard R6/R15 character heads)
 	if not barLocalOffsets[enemyModel] then
-		local cframe, size = enemyModel:GetBoundingBox()
-		local centerTopWorld = cframe.Position + Vector3.new(0, size.Y / 2 + HP_BAR_GAP, 0)
-		barLocalOffsets[enemyModel] = root.CFrame:PointToObjectSpace(centerTopWorld)
+		barLocalOffsets[enemyModel] = Vector3.new(0, 3.5 + HP_BAR_GAP, 0)
 	end
 	attachment.Position = barLocalOffsets[enemyModel]
 end
