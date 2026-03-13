@@ -73,6 +73,18 @@ TowerData.Towers = {
 		gachaBanner      = "standard",
 		imageId          = "",
 	},
+
+	Pathfinder = {
+		displayName      = "Pathfinder",
+		rarity           = "LEGENDARY",
+		description      = "A spectral zone controller who dashes between waypoints and binds enemy souls. After placing 4 Waypoints, Reclamation pulls all souls through the chain for devastating area damage.",
+		role             = "Zone DPS",
+		equipmentSlots   = 3,
+		lockedByDefault  = true,
+		bannerWeight     = 5,
+		gachaBanner      = "standard",
+		imageId          = "",
+	},
 }
 
 -- ============================================================
@@ -138,7 +150,7 @@ TowerData.Banners = {
 		costPerPull        = 160,     -- Gems per single pull
 		coinCostPerPull    = 1000,    -- Coins per single pull (no pity)
 		pityAt             = 70,
-		pools              = { "Warrior", "Deadeye", "Vitalist", "Wanderer" },
+		pools              = { "Warrior", "Deadeye", "Vitalist", "Wanderer", "Pathfinder" },
 		rateUpTower        = nil,
 		rateUpChance       = 0,
 		rateUpRotationSec  = 0,
@@ -149,7 +161,7 @@ TowerData.Banners = {
 		costPerPull        = 160,     -- Gems per single pull
 		coinCostPerPull    = 1000,    -- Coins per single pull (no pity)
 		pityAt             = 70,
-		pools              = { "Warrior", "Deadeye", "Vitalist", "Wanderer" },
+		pools              = { "Warrior", "Deadeye", "Vitalist", "Wanderer", "Pathfinder" },
 		rateUpTower        = "Deadeye",  -- default starting Rate-Up (server overrides hourly)
 		rateUpChance       = 0.50,    -- 50 % of EPIC+ pulls guaranteed to be the Rate-Up
 		rateUpRotationSec  = 3600,
