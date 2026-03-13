@@ -66,6 +66,20 @@ TowerStats.Templates = {
 		AttackDesc   = "Drone fires bursts of 2 (0.5× ATK each). During Reconnaissance: Wanderer fires High Caliber (1.5× ATK).",
 		DamageMulti  = 1.0,
 	},
+
+	Pathfinder = {
+		ATK      = 14,    -- soul / reclamation base damage
+		ATK_SPD  = 0.5,   -- repurposed into Ability Haste at ⅓ rate
+		RNG      = 20,    -- Soulbind & Reclamation range
+		HP       = 85,
+		MOVE_SPD = 16,    -- base walk speed; 1.2× while ghosted
+
+		-- Attack info
+		AttackType   = "Zone",
+		AttackName   = "RECLAMATION",
+		AttackDesc   = "Cannot attack normally. After placing 4 Waypoints, pulls all souls through waypoints dealing 1× ATK per leg (+0.25× per waypoint passed).",
+		DamageMulti  = 1.0,
+	},
 }
 
 return TowerStats

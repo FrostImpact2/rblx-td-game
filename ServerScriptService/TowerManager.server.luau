@@ -22,10 +22,11 @@ local PathfindingModule = require(ReplicatedStorage:WaitForChild("PathfindingMod
 if not TowerStats then error("[TowerManager] Could not find TowerStats!") end
 
 -- Tower modules
-local Warrior   = require(script.Parent:WaitForChild("Towers"):WaitForChild("Warrior",   10))
-local Deadeye   = require(script.Parent:WaitForChild("Towers"):WaitForChild("Deadeye",   10))
-local Vitalist  = require(script.Parent:WaitForChild("Towers"):WaitForChild("Vitalist",  10))
-local Wanderer  = require(script.Parent:WaitForChild("Towers"):WaitForChild("Wanderer",  10))
+local Warrior    = require(script.Parent:WaitForChild("Towers"):WaitForChild("Warrior",    10))
+local Deadeye    = require(script.Parent:WaitForChild("Towers"):WaitForChild("Deadeye",    10))
+local Vitalist   = require(script.Parent:WaitForChild("Towers"):WaitForChild("Vitalist",   10))
+local Wanderer   = require(script.Parent:WaitForChild("Towers"):WaitForChild("Wanderer",   10))
+local Pathfinder = require(script.Parent:WaitForChild("Towers"):WaitForChild("Pathfinder", 10))
 
 -- Enemy modules
 local BasicZombie = require(script.Parent:WaitForChild("Enemies"):WaitForChild("BasicZombie", 10))
@@ -43,9 +44,10 @@ local activeMovements = {}
 
 local function getTowerModule(tower: Model)
 	local tt = tower:GetAttribute("TowerType")
-	if tt == "Deadeye"  then return Deadeye  end
-	if tt == "Vitalist" then return Vitalist end
-	if tt == "Wanderer" then return Wanderer end
+	if tt == "Deadeye"    then return Deadeye    end
+	if tt == "Vitalist"   then return Vitalist   end
+	if tt == "Wanderer"   then return Wanderer   end
+	if tt == "Pathfinder" then return Pathfinder  end
 	return Warrior
 end
 
@@ -609,6 +611,8 @@ local function registerTower(towerModel: Model)
 		Vitalist.InitTower(towerModel)
 	elseif tt == "Wanderer" then
 		Wanderer.InitTower(towerModel)
+	elseif tt == "Pathfinder" then
+		Pathfinder.InitTower(towerModel)
 	end
 	activeTowers[towerModel] = { lastAttackTime = 0 }
 end
@@ -743,6 +747,16 @@ RunService.Heartbeat:Connect(function()
 			tower:SetAttribute("State", "Attacking")
 			data.lastAttackTime = now
 			Wanderer.DoAttack(tower, droneTarget, enemiesFolder)
+			continue
+		end
+
+		-- ══════════════════════════════════════════════════════
+		-- PATHFINDER combat branch  (no normal attacks)
+		-- ══════════════════════════════════════════════════════
+		if towerType == "Pathfinder" then
+			Pathfinder.TickSouls(tower, enemiesFolder)
+			Pathfinder.TickReclamation(tower, enemiesFolder)
+			Pathfinder.UpdateCombatState(tower, false, nil)
 			continue
 		end
 
@@ -911,6 +925,7 @@ RunService.Heartbeat:Connect(function()
 	-- === SCAN FOR NEW AGGRO ===
 	for tower, _ in pairs(activeTowers) do
 		if not tower or not tower.Parent then continue end
+		if tower:GetAttribute("Ghosted") == true then continue end  -- Pathfinder passive
 		local towerState = tower:GetAttribute("State") or "Idle"
 		if towerState == "Moving" or towerState == "Leaping" then continue end
 
@@ -942,6 +957,11 @@ RunService.Heartbeat:Connect(function()
 				enemy:SetAttribute("AggroTarget", "")
 				enemy:SetAttribute("WalkStopped", false)
 			end
+			continue
+		end
+		-- Release aggro on ghosted towers (Pathfinder passive)
+		if tower:GetAttribute("Ghosted") == true then
+			releaseAggro(tower)
 			continue
 		end
 		if (enemy:GetAttribute("HP") or 0) <= 0 then continue end
@@ -1027,6 +1047,8 @@ placeRemote.OnServerEvent:Connect(function(player: Player, templateName: string,
 		towerModel = Vitalist.CreateModel(position, TowerStats)
 	elseif templateName == "Wanderer" then
 		towerModel = Wanderer.CreateModel(position, TowerStats)
+	elseif templateName == "Pathfinder" then
+		towerModel = Pathfinder.CreateModel(position, TowerStats)
 	else
 		towerModel = Warrior.CreateModel(position, TowerStats, Warrior.LEAP_RANGE_MULT, Warrior.LEAP_SLASH_COOLDOWN)
 	end
@@ -1050,6 +1072,15 @@ moveRemote.OnServerEvent:Connect(function(player: Player, tower: Model, dest: Ve
 	if towerType == "Wanderer" then
 		-- For Wanderer: move the Drone, not the tower itself
 		Wanderer.MoveDrone(tower, dest)
+	elseif towerType == "Pathfinder" then
+		-- Pathfinder handles its own move (dash + ghost + waypoints)
+		Pathfinder.HandleMove(tower, dest, function(t, pos)
+			local circle = t:FindFirstChild("RangeCircle")
+			if circle then
+				circle.CFrame = CFrame.new(pos.X, pos.Y - 2.5, pos.Z)
+					* CFrame.Angles(0, 0, math.rad(90))
+			end
+		end)
 	else
 		moveTower(tower, dest)
 	end
@@ -1097,6 +1128,11 @@ strikeSkillRemote.OnServerEvent:Connect(function(player: Player, tower: Model, s
 	elseif skillName == "Reconnaissance" and towerType == "Wanderer" then
 		if not Wanderer.IsReconReady(tower) then return end
 		Wanderer.ActivateReconnaissance(tower)
+
+	elseif skillName == "Soulbind" and towerType == "Pathfinder" then
+		if typeof(position) ~= "Vector3" then return end
+		if not Pathfinder.IsSoulbindReady(tower) then return end
+		Pathfinder.FireSoulbind(tower, position, enemiesFolder, damageIndicatorRemote)
 	end
 end)
 

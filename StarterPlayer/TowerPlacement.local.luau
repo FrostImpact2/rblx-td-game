@@ -39,6 +39,14 @@ local vitalistAimTower: Model?         = nil
 local vitalistAimRect: Part?           = nil
 local vitalistAimConnection: RBXScriptConnection? = nil
 
+-- Strike Skill aiming state (Pathfinder Soulbind)
+local pathfinderAiming      = false
+local pathfinderAimTower: Model?        = nil
+local pathfinderAimGhost: Part?         = nil
+local pathfinderRangeCircle: Part?      = nil
+local pathfinderCanPlace    = false
+local pathfinderAimConnection: RBXScriptConnection? = nil
+
 local ghostFolder: Folder? = nil
 local ghostParts    = {}
 local rangePreview: Part? = nil
@@ -48,11 +56,12 @@ local updateConnection: RBXScriptConnection? = nil
 local towerHpGuis        = {}
 local towerBarAttachments = {}
 
-local PLACE_KEY_DEADEYE  = Enum.KeyCode.T
-local PLACE_KEY_WARRIOR  = Enum.KeyCode.U
-local PLACE_KEY_VITALIST = Enum.KeyCode.Y
-local PLACE_KEY_WANDERER = Enum.KeyCode.P
-local STRIKE_SKILL_KEY   = Enum.KeyCode.Q
+local PLACE_KEY_DEADEYE    = Enum.KeyCode.T
+local PLACE_KEY_WARRIOR    = Enum.KeyCode.U
+local PLACE_KEY_VITALIST   = Enum.KeyCode.Y
+local PLACE_KEY_WANDERER   = Enum.KeyCode.P
+local PLACE_KEY_PATHFINDER = Enum.KeyCode.O
+local STRIKE_SKILL_KEY     = Enum.KeyCode.Q
 local GHOST_TRANSPARENCY = 0.5
 local VALID_COLOR        = Color3.fromRGB(100, 255, 100)
 local INVALID_COLOR      = Color3.fromRGB(255, 80,  80)
@@ -62,10 +71,11 @@ local HP_BAR_GAP         = 1.5
 local dynamiteRange      = 10   -- updated when aiming begins
 
 local TOWER_RANGE_STUDS = {
-	Warrior  = 8,
-	Deadeye  = 30,
-	Vitalist = 20,
-	Wanderer = 60,
+	Warrior    = 8,
+	Deadeye    = 30,
+	Vitalist   = 20,
+	Wanderer   = 60,
+	Pathfinder = 20,
 }
 
 -- ============================================================
@@ -346,6 +356,24 @@ local TOWER_PANEL_DATA = {
 			name    = "RECONNAISSANCE  [Q]",
 			desc    = "Drone pulses green light for 6s. Wanderer targets enemies in drone range, firing High Caliber (1.5× ATK) instead of Heavy Rounds. 20s cooldown.",
 			skillId = "Reconnaissance",
+		},
+	},
+	Pathfinder = {
+		displayName  = "Pathfinder",
+		sellValue    = 250,
+		upgradeCost  = 6000,
+		upgradeLines = {
+			"+3 ATK, +3 Range",
+			"Soulbind: 4s > 3s CD, max 5 souls",
+			"Reclamation: +0.1× waypoint amplification",
+		},
+		upgradeName  = "Ethereal Mastery",
+		level        = 0,
+		maxLevel     = 3,
+		strikeSkill  = {
+			name    = "SOULBIND  [Q]",
+			desc    = "Fire a spectral bolt (0.8× ATK). Lodges a Tethered Soul for 8s (max 4). If host dies, soul becomes Untethered for 12s. 4s cooldown.",
+			skillId = "Soulbind",
 		},
 	},
 }
@@ -1105,6 +1133,92 @@ local function startVitalistAiming(towerModel: Model)
 end
 
 -- ============================================================
+-- STRIKE SKILL AIMING (Pathfinder Soulbind)
+-- ============================================================
+
+local function stopPathfinderAiming()
+	if pathfinderAimGhost   and pathfinderAimGhost.Parent   then pathfinderAimGhost:Destroy()   end
+	if pathfinderRangeCircle and pathfinderRangeCircle.Parent then pathfinderRangeCircle:Destroy() end
+	pathfinderAimGhost   = nil
+	pathfinderRangeCircle = nil
+	pathfinderAiming     = false
+	pathfinderAimTower   = nil
+	pathfinderCanPlace   = false
+	if pathfinderAimConnection then pathfinderAimConnection:Disconnect(); pathfinderAimConnection = nil end
+end
+
+local function startPathfinderAiming(towerModel: Model)
+	if placing then stopPlacing() end
+	stopStrikeAiming()
+	stopVitalistAiming()
+	stopPathfinderAiming()
+
+	pathfinderAiming   = true
+	pathfinderAimTower = towerModel
+
+	local towerRng = towerModel:GetAttribute("RNG") or TOWER_RANGE_STUDS.Pathfinder or 20
+
+	-- Ghost indicator (spectral orb)
+	local g          = Instance.new("Part")
+	g.Name           = "SoulbindGhost"
+	g.Shape          = Enum.PartType.Ball
+	g.Size           = Vector3.new(0.8, 0.8, 0.8)
+	g.Color          = Color3.fromRGB(140, 220, 255)
+	g.Transparency   = 0.3
+	g.Material       = Enum.Material.Neon
+	g.Anchored       = true
+	g.CanCollide     = false
+	g.CastShadow     = false
+	g.CFrame         = CFrame.new(0, -1000, 0)
+	g.Parent         = Workspace
+	pathfinderAimGhost = g
+
+	-- Range circle
+	local rc         = Instance.new("Part")
+	rc.Name          = "SoulbindRangeCircle"
+	rc.Shape         = Enum.PartType.Cylinder
+	rc.Size          = Vector3.new(0.12, towerRng * 2, towerRng * 2)
+	rc.Color         = Color3.fromRGB(100, 180, 255)
+	rc.Transparency  = 0.65
+	rc.Material      = Enum.Material.Neon
+	rc.Anchored      = true
+	rc.CanCollide    = false
+	rc.CastShadow    = false
+	rc.CFrame        = CFrame.new(0, -1000, 0)
+	rc.Parent        = Workspace
+	pathfinderRangeCircle = rc
+
+	if towerModel.PrimaryPart then
+		local tp = towerModel.PrimaryPart.Position
+		rc.CFrame = CFrame.new(tp.X, tp.Y - 2.4, tp.Z) * CFrame.Angles(0, 0, math.rad(90))
+	end
+
+	pathfinderAimConnection = RunService.RenderStepped:Connect(function()
+		if not pathfinderAiming then return end
+		if not pathfinderAimTower or not pathfinderAimTower.PrimaryPart then return end
+
+		local tPos = pathfinderAimTower.PrimaryPart.Position
+		pathfinderRangeCircle.CFrame = CFrame.new(tPos.X, tPos.Y - 2.4, tPos.Z)
+			* CFrame.Angles(0, 0, math.rad(90))
+
+		local groundPos = raycastGround()
+		if not groundPos then
+			pathfinderCanPlace = false
+			pathfinderAimGhost.CFrame = CFrame.new(0, -1000, 0)
+			return
+		end
+
+		local flatDist = Vector3.new(groundPos.X - tPos.X, 0, groundPos.Z - tPos.Z).Magnitude
+		pathfinderCanPlace = (flatDist <= towerRng)
+
+		pathfinderAimGhost.CFrame = CFrame.new(groundPos.X, groundPos.Y + 0.6, groundPos.Z)
+		pathfinderAimGhost.Color  = pathfinderCanPlace
+			and Color3.fromRGB(140, 220, 255)
+			or  Color3.fromRGB(255,  60, 60)
+	end)
+end
+
+-- ============================================================
 -- INPUT
 -- ============================================================
 
@@ -1119,10 +1233,13 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		startPlacing("Warrior")
 	elseif input.KeyCode == PLACE_KEY_WANDERER then
 		startPlacing("Wanderer")
+	elseif input.KeyCode == PLACE_KEY_PATHFINDER then
+		startPlacing("Pathfinder")
 
 	elseif input.KeyCode == STRIKE_SKILL_KEY then
-		if strikeAiming   then stopStrikeAiming();   return end
-		if vitalistAiming then stopVitalistAiming();  return end
+		if strikeAiming     then stopStrikeAiming();     return end
+		if vitalistAiming   then stopVitalistAiming();    return end
+		if pathfinderAiming then stopPathfinderAiming();  return end
 		if not selectedTowerModel or not selectedTowerModel.Parent then return end
 		local towerType = selectedTowerModel:GetAttribute("TowerType")
 		local panelData = TOWER_PANEL_DATA[towerType]
@@ -1135,11 +1252,24 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		elseif towerType == "Wanderer" then
 			-- Reconnaissance: fire-and-forget, no aiming needed
 			strikeSkillRemote:FireServer(selectedTowerModel, "Reconnaissance", Vector3.zero)
+		elseif towerType == "Pathfinder" then
+			startPathfinderAiming(selectedTowerModel)
 		end
 	end
 end)
 
 mouse.Button1Down:Connect(function()
+	if pathfinderAiming then
+		if pathfinderCanPlace then
+			local groundPos = raycastGround()
+			if groundPos and pathfinderAimTower and pathfinderAimTower.PrimaryPart then
+				strikeSkillRemote:FireServer(pathfinderAimTower, "Soulbind", groundPos)
+			end
+		end
+		stopPathfinderAiming()
+		return
+	end
+
 	if vitalistAiming then
 		local groundPos = raycastGround()
 		if groundPos and vitalistAimTower and vitalistAimTower.PrimaryPart then
