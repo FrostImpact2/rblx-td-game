@@ -444,6 +444,8 @@ end
 -- ============================================================
 
 local TOWER_MOVE_COOLDOWN = 3  -- seconds after a tower moves before it can move again
+local MOVE_ARRIVE_TOLERANCE = 0.2 -- tighter threshold for snappier move completion
+local MOVE_ROTATION_LERP_SPEED = 16 -- faster facing updates for more responsive movement
 local moveIndicators  = {}  -- tower -> Part
 
 local function createMoveIndicator(dest: Vector3): Part
@@ -525,7 +527,7 @@ local function moveTower(tower: Model, dest: Vector3)
 		local flat = Vector3.new(dest.X - cur.X, 0, dest.Z - cur.Z)
 		local dist = flat.Magnitude
 
-		if dist < 0.2 then
+		if dist < MOVE_ARRIVE_TOLERANCE then
 			conn:Disconnect(); activeMovements[tower] = nil
 			tower:SetAttribute("State", "Idle")
 			mod.StopWalk(tower)
@@ -542,7 +544,7 @@ local function moveTower(tower: Model, dest: Vector3)
 		local tCF    = CFrame.new(newPos, newPos + moveDir)
 		local curRot = torso.CFrame - torso.CFrame.Position
 		local tRot   = tCF - tCF.Position
-		torso.CFrame = curRot:Lerp(tRot, math.clamp(dt * 16, 0, 1)) + newPos
+		torso.CFrame = curRot:Lerp(tRot, math.clamp(dt * MOVE_ROTATION_LERP_SPEED, 0, 1)) + newPos
 
 		updateCirclePositions(tower, newPos)
 	end)

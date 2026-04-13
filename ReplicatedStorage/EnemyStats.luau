@@ -5,6 +5,9 @@ ATK_SPD is attack delay in seconds (lower is better).
 ]]
 
 local EnemyStats = {}
+local DEFAULT_MOVE_SPD = 7
+local DEFAULT_ATK_SPD = 2
+local DEFAULT_RNG = 5
 
 EnemyStats.Templates = {
 ["BasicZombie"] = {
@@ -39,26 +42,26 @@ TARGETING = "CLOSEST",
 }
 
 function EnemyStats.ResolveMoveSpd(value: any): number
-local num = tonumber(value)
-if num == nil then
-return 7
-end
+	local num = tonumber(value)
+	if num == nil then
+		return DEFAULT_MOVE_SPD
+	end
 return math.max(1, math.floor(num + 0.5))
 end
 
 function EnemyStats.ResolveAtkSpd(value: any): number
-local num = tonumber(value)
-if num == nil then
-return 2
-end
+	local num = tonumber(value)
+	if num == nil then
+		return DEFAULT_ATK_SPD
+	end
 return math.max(1, math.floor(num + 0.5))
 end
 
 function EnemyStats.ResolveRng(value: any): number
-local num = tonumber(value)
-if num == nil then
-return 5
-end
+	local num = tonumber(value)
+	if num == nil then
+		return DEFAULT_RNG
+	end
 return math.max(1, math.floor(num + 0.5))
 end
 
