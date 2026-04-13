@@ -30,6 +30,7 @@ local RunService        = game:GetService("RunService")
 local TweenService      = game:GetService("TweenService")
 local ServerStorage     = game:GetService("ServerStorage")
 local Workspace         = game:GetService("Workspace")
+local CombatMath        = require(ReplicatedStorage:WaitForChild("CombatMath", 10))
 
 local Pathfinder = {}
 
@@ -66,6 +67,7 @@ local SUMMON_ANIM_ID  = "rbxassetid://104035019425960"
 local DASH_ANIM_ID    = "rbxassetid://112527657706925"
 local WALK_ANIM_ID    = "rbxassetid://73323871613223"
 local STRIKE_ANIM_ID  = "rbxassetid://95311978328925"
+local BEAM_DISPLAY_DURATION = 0.08
 
 -- ============================================================
 -- STATE TABLES
@@ -337,51 +339,59 @@ end
 -- ============================================================
 
 local function spawnSpectralBolt(fromPos: Vector3, toPos: Vector3, onHit: () -> ())
-	local dir  = toPos - fromPos
-	local dist = dir.Magnitude
+	local dist = (toPos - fromPos).Magnitude
 	if dist < 0.1 then onHit(); return end
-	dir = dir.Unit
 
-	local bolt       = Instance.new("Part")
-	bolt.Name        = "SpectralBolt"
-	bolt.Shape       = Enum.PartType.Ball
-	bolt.Size        = Vector3.new(0.5, 0.5, 0.5)
-	bolt.Color       = Color3.fromRGB(140, 220, 255)
-	bolt.Material    = Enum.Material.Neon
-	bolt.Anchored    = true
-	bolt.CanCollide  = false
-	bolt.CastShadow  = false
-	bolt.CFrame      = CFrame.new(fromPos)
-	bolt.Parent      = Workspace
+	local anchorA = Instance.new("Part")
+	anchorA.Anchored = true
+	anchorA.CanCollide = false
+	anchorA.CanQuery = false
+	anchorA.CanTouch = false
+	anchorA.Transparency = 1
+	anchorA.Size = Vector3.new(0.05, 0.05, 0.05)
+	anchorA.CFrame = CFrame.new(fromPos)
+	anchorA.Parent = Workspace
 
-	local a0 = Instance.new("Attachment"); a0.Position = Vector3.new(0, 0,  0.25); a0.Parent = bolt
-	local a1 = Instance.new("Attachment"); a1.Position = Vector3.new(0, 0, -0.25); a1.Parent = bolt
-	local tr = Instance.new("Trail")
-	tr.Attachment0  = a0
-	tr.Attachment1  = a1
-	tr.Lifetime     = 0.15
-	tr.MinLength    = 0
-	tr.FaceCamera   = true
-	tr.Color        = ColorSequence.new({
+	local anchorB = Instance.new("Part")
+	anchorB.Anchored = true
+	anchorB.CanCollide = false
+	anchorB.CanQuery = false
+	anchorB.CanTouch = false
+	anchorB.Transparency = 1
+	anchorB.Size = Vector3.new(0.05, 0.05, 0.05)
+	anchorB.CFrame = CFrame.new(toPos)
+	anchorB.Parent = Workspace
+
+	local attA = Instance.new("Attachment")
+	attA.Parent = anchorA
+	local attB = Instance.new("Attachment")
+	attB.Parent = anchorB
+
+	local beam = Instance.new("Beam")
+	beam.Attachment0 = attA
+	beam.Attachment1 = attB
+	beam.FaceCamera = true
+	beam.LightEmission = 1
+	beam.LightInfluence = 0
+	beam.Segments = 1
+	beam.Width0 = 0.18
+	beam.Width1 = 0.06
+	beam.Color = ColorSequence.new({
 		ColorSequenceKeypoint.new(0, Color3.fromRGB(140, 220, 255)),
 		ColorSequenceKeypoint.new(1, Color3.fromRGB(60, 100, 180)),
 	})
-	tr.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
-	tr.Parent       = bolt
+	beam.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.05),
+		NumberSequenceKeypoint.new(1, 0.8),
+	})
+	beam.Parent = anchorA
 
-	local speed      = Pathfinder.SOULBIND_BOLT_SPEED
-	local travelTime = dist / speed
-	local elapsed    = 0
-	local conn; conn = RunService.Heartbeat:Connect(function(dt)
-		elapsed += dt
-		if elapsed >= travelTime or not bolt.Parent then
-			conn:Disconnect()
-			if bolt.Parent then bolt:Destroy() end
-			onHit()
-			return
-		end
-		bolt.CFrame = CFrame.new(fromPos + dir * (elapsed * speed), toPos)
+	task.delay(BEAM_DISPLAY_DURATION, function()
+		if anchorA and anchorA.Parent then anchorA:Destroy() end
+		if anchorB and anchorB.Parent then anchorB:Destroy() end
 	end)
+
+	onHit()
 end
 
 -- ============================================================
@@ -561,6 +571,7 @@ function Pathfinder.CreateModel(position: Vector3, TowerStats: any): Model?
 	model:SetAttribute("RNG",         rangeStuds)
 	model:SetAttribute("HP",          template.HP)
 	model:SetAttribute("MaxHP",       template.HP)
+	model:SetAttribute("DEF",         template.DEF or 0)
 	model:SetAttribute("MOVE_SPD",    template.MOVE_SPD)
 	model:SetAttribute("DamageMulti", template.DamageMulti or 1.0)
 	model:SetAttribute("AttackType",  template.AttackType  or "Zone")
@@ -913,7 +924,8 @@ function Pathfinder.FireSoulbind(tower: Model, targetPos: Vector3, enemiesFolder
 
 		local atk    = tower:GetAttribute("ATK") or 14
 		local multi  = tower:GetAttribute("DamageMulti") or 1.0
-		local damage = atk * multi * Pathfinder.SOULBIND_DAMAGE_MULT
+		local rawDamage = atk * multi * Pathfinder.SOULBIND_DAMAGE_MULT
+		local damage = CombatMath.ApplyDefense(rawDamage, bestEnemy:GetAttribute("DEF") or 0)
 
 		local hp    = bestEnemy:GetAttribute("HP") or 0
 		local newHP = hp - damage
@@ -1019,10 +1031,11 @@ local function damageAlongPath(fromPos: Vector3, toPos: Vector3, damage: number,
 			if (ep - (fromPos + dir * t)).Magnitude <= radius then
 				hit[enemy] = true
 				local hp    = enemy:GetAttribute("HP") or 0
-				local newHP = hp - damage
+				local dealt = CombatMath.ApplyDefense(damage, enemy:GetAttribute("DEF") or 0)
+				local newHP = hp - dealt
 				enemy:SetAttribute("HP", newHP)
 				local remote = ReplicatedStorage:FindFirstChild("ShowDamageIndicator")
-				if remote then remote:FireAllClients(ep, damage, "Normal") end
+				if remote then remote:FireAllClients(ep, dealt, "Normal") end
 				Pathfinder.SpawnHitParticles(ep, Color3.fromRGB(120, 200, 255))
 				if newHP <= 0 and enemy.Parent then enemy:Destroy() end
 			end

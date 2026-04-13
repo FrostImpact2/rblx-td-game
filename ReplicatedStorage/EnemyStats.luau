@@ -1,103 +1,75 @@
 --[[
-	EnemyStats Module
-	Defines base stats and category values for basic enemies.
+EnemyStats Module
+Defines integer base stats for enemies.
+ATK_SPD is attack delay in seconds (lower is better).
 ]]
 
 local EnemyStats = {}
+local DEFAULT_MOVE_SPD = 7
+local DEFAULT_ATK_SPD = 2
+local DEFAULT_RNG = 5
 
-EnemyStats.AtkSpdTiers = {
-	["VERY SLOW"]  = 3.0,
-	["SLOW"]       = 2.0,
-	["MEDIUM"]     = 1.2,
-	["FAST"]       = 0.7,
-	["VERY FAST"]  = 0.3,
-}
-
-EnemyStats.MoveSpdTiers = {
-	["VERY SLOW"]  = 2,
-	["SLOW"]       = 4,
-	["MEDIUM"]     = 7,
-	["FAST"]       = 10,
-	["VERY FAST"]  = 14,
-}
-
-EnemyStats.RngTiers = {
-	["VERY SHORT"] = 5,
-	["SHORT"]      = 10,
-	["MEDIUM"]     = 18,
-	["LONG"]       = 28,
-	["VERY LONG"]  = 40,
-}
-
-EnemyStats.SpdOrder = {"VERY SLOW", "SLOW", "MEDIUM", "FAST", "VERY FAST"}
-EnemyStats.RngOrder = {"VERY SHORT", "SHORT", "MEDIUM", "LONG", "VERY LONG"}
+local function resolveIntStat(value: any, fallback: number): number
+	local num = tonumber(value)
+	if num == nil then
+		return fallback
+	end
+	return math.max(1, math.floor(num + 0.5))
+end
 
 EnemyStats.Templates = {
-	["BasicZombie"] = {
-		ATK        = 5,
-		ATK_SPD    = "MEDIUM",
-		MOVE_SPD   = "MEDIUM",
-		HP         = 50,
-		RNG        = "VERY SHORT",
-		TARGETING  = "CLOSEST",
-	},
-	
-	["FastDummy"] = {
-		ATK        = 3,
-		ATK_SPD    = "FAST",
-		MOVE_SPD   = "FAST",
-		HP         = 30,
-		RNG        = "VERY SHORT",
-		TARGETING  = "CLOSEST",
-	},
-	
-	["TankyDummy"] = {
-		ATK        = 7,
-		ATK_SPD    = "SLOW",
-		MOVE_SPD   = "SLOW",
-		HP         = 70,
-		RNG        = "VERY SHORT",
-		TARGETING  = "CLOSEST",
-	},
-	
+["BasicZombie"] = {
+ATK       = 5,
+DEF       = 0,
+ATK_SPD   = 2,
+MOVE_SPD  = 7,
+HP        = 50,
+RNG       = 5,
+TARGETING = "CLOSEST",
+},
+
+["FastDummy"] = {
+ATK       = 3,
+DEF       = 0,
+ATK_SPD   = 1,
+MOVE_SPD  = 10,
+HP        = 30,
+RNG       = 5,
+TARGETING = "CLOSEST",
+},
+
+["TankyDummy"] = {
+ATK       = 7,
+DEF       = 2,
+ATK_SPD   = 3,
+MOVE_SPD  = 4,
+HP        = 70,
+RNG       = 5,
+TARGETING = "CLOSEST",
+},
 }
 
-
-
-
-
-
-function EnemyStats.ResolveMoveSpd(tierName: string): number
-	return EnemyStats.MoveSpdTiers[tierName] or EnemyStats.MoveSpdTiers["MEDIUM"]
+function EnemyStats.ResolveMoveSpd(value: any): number
+	return resolveIntStat(value, DEFAULT_MOVE_SPD)
 end
 
-function EnemyStats.ResolveAtkSpd(tierName: string): number
-	return EnemyStats.AtkSpdTiers[tierName] or EnemyStats.AtkSpdTiers["MEDIUM"]
+function EnemyStats.ResolveAtkSpd(value: any): number
+	return resolveIntStat(value, DEFAULT_ATK_SPD)
 end
 
-function EnemyStats.ResolveRng(tierName: string): number
-	return EnemyStats.RngTiers[tierName] or EnemyStats.RngTiers["MEDIUM"]
-end
-
-function EnemyStats.ShiftTier(tierName: string, orderList: {string}, delta: number): string
-	for i, name in ipairs(orderList) do
-		if name == tierName then
-			local newIndex = math.clamp(i + delta, 1, #orderList)
-			return orderList[newIndex]
-		end
-	end
-	return tierName
+function EnemyStats.ResolveRng(value: any): number
+	return resolveIntStat(value, DEFAULT_RNG)
 end
 
 function EnemyStats.ApplyModifier(baseValue: number, flat: number?, percent: number?): number
-	local value = baseValue
-	if flat then
-		value = value + flat
-	end
-	if percent then
-		value = value * (percent / 100)
-	end
-	return math.ceil(value)
+local value = baseValue
+if flat then
+value += flat
+end
+if percent then
+value *= (1 + (percent / 100))
+end
+return math.max(1, math.floor(value + 0.5))
 end
 
 return EnemyStats

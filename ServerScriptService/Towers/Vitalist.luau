@@ -51,6 +51,7 @@ local TweenService      = game:GetService("TweenService")
 local Workspace         = game:GetService("Workspace")
 local ServerStorage     = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CombatMath        = require(ReplicatedStorage:WaitForChild("CombatMath", 10))
 
 local Vitalist = {}
 
@@ -864,6 +865,7 @@ function Vitalist.CreateModel(position: Vector3, TowerStats: any): Model?
 	model:SetAttribute("RNG",         rangeStuds)
 	model:SetAttribute("HP",          template.HP)
 	model:SetAttribute("MaxHP",       template.HP)
+	model:SetAttribute("DEF",         template.DEF or 0)
 	model:SetAttribute("MOVE_SPD",    template.MOVE_SPD)
 	model:SetAttribute("DamageMulti", template.DamageMulti or 1.0)
 	model:SetAttribute("AttackType",  template.AttackType  or "Hybrid")
@@ -1125,10 +1127,11 @@ function Vitalist.DoAttack(
 					end
 				else
 					local hp    = target:GetAttribute("HP") or 0
-					local newHP = hp - bulletDmg
+					local dealt = CombatMath.ApplyDefense(bulletDmg, target:GetAttribute("DEF") or 0)
+					local newHP = hp - dealt
 					target:SetAttribute("HP", newHP)
 					if indicatorRemote then
-						indicatorRemote:FireAllClients(impactPos, bulletDmg, "Normal")
+						indicatorRemote:FireAllClients(impactPos, dealt, "Normal")
 					end
 					if newHP <= 0 and target.Parent then
 						target:Destroy()
@@ -1321,11 +1324,12 @@ function Vitalist.FireNanoBlast(
 				if e and e.Parent and e.PrimaryPart then
 					local impactPos = e.PrimaryPart.Position
 					local hp        = e:GetAttribute("HP") or 0
-					local newHP     = hp - blastDmg
+					local dealt     = CombatMath.ApplyDefense(blastDmg, e:GetAttribute("DEF") or 0)
+					local newHP     = hp - dealt
 					e:SetAttribute("HP", newHP)
 					Vitalist.SpawnEnhancedHitVFX(impactPos, beamColor)
 					if indicatorRemote then
-						indicatorRemote:FireAllClients(impactPos, blastDmg, "Nano")
+						indicatorRemote:FireAllClients(impactPos, dealt, "Nano")
 					end
 					if newHP <= 0 and e.Parent then
 						e:Destroy()

@@ -92,6 +92,7 @@ local function createEnemyModel(templateName: string): Model?
 
 	-- Apply stats as model attributes
 	model:SetAttribute("ATK",        stats.ATK)
+	model:SetAttribute("DEF",        stats.DEF or 0)
 	model:SetAttribute("ATK_SPD",    stats.ATK_SPD)
 	model:SetAttribute("MOVE_SPD",   stats.MOVE_SPD)
 	model:SetAttribute("HP",         stats.HP)
@@ -220,4 +221,3 @@ task.wait(3)
 spawnWave("FastDummy", 5, 2)
 task.wait(3)
 spawnWave("TankyDummy", 5, 4)
-

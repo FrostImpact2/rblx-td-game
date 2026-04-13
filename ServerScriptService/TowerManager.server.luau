@@ -17,6 +17,7 @@ local RunService        = game:GetService("RunService")
 local Workspace         = game:GetService("Workspace")
 
 local TowerStats        = require(ReplicatedStorage:WaitForChild("TowerStats", 10))
+local CombatMath        = require(ReplicatedStorage:WaitForChild("CombatMath", 10))
 local PathfindingModule = require(ReplicatedStorage:WaitForChild("PathfindingModule", 10))
 
 if not TowerStats then error("[TowerManager] Could not find TowerStats!") end
@@ -130,6 +131,18 @@ local function getPathDirection(flatPos: Vector3): Vector3
 		end
 	end
 	return bestDir
+end
+
+local function applyDamageToModel(target: Model, rawDamage: number): (number, number)
+	local hp      = target:GetAttribute("HP") or 0
+	local defense = target:GetAttribute("DEF") or 0
+	local damage  = CombatMath.ApplyDefense(rawDamage, defense)
+	local newHP   = hp - damage
+	target:SetAttribute("HP", newHP)
+	if newHP <= 0 and target.Parent then
+		target:Destroy()
+	end
+	return damage, newHP
 end
 
 -- ============================================================
@@ -431,6 +444,8 @@ end
 -- ============================================================
 
 local TOWER_MOVE_COOLDOWN = 3  -- seconds after a tower moves before it can move again
+local MOVE_ARRIVE_TOLERANCE = 0.2 -- tighter threshold for snappier move completion
+local MOVE_ROTATION_LERP_SPEED = 16 -- faster facing updates for more responsive movement
 local moveIndicators  = {}  -- tower -> Part
 
 local function createMoveIndicator(dest: Vector3): Part
@@ -512,7 +527,7 @@ local function moveTower(tower: Model, dest: Vector3)
 		local flat = Vector3.new(dest.X - cur.X, 0, dest.Z - cur.Z)
 		local dist = flat.Magnitude
 
-		if dist < 0.5 then
+		if dist < MOVE_ARRIVE_TOLERANCE then
 			conn:Disconnect(); activeMovements[tower] = nil
 			tower:SetAttribute("State", "Idle")
 			mod.StopWalk(tower)
@@ -529,7 +544,7 @@ local function moveTower(tower: Model, dest: Vector3)
 		local tCF    = CFrame.new(newPos, newPos + moveDir)
 		local curRot = torso.CFrame - torso.CFrame.Position
 		local tRot   = tCF - tCF.Position
-		torso.CFrame = curRot:Lerp(tRot, math.clamp(dt * 8, 0, 1)) + newPos
+		torso.CFrame = curRot:Lerp(tRot, math.clamp(dt * MOVE_ROTATION_LERP_SPEED, 0, 1)) + newPos
 
 		updateCirclePositions(tower, newPos)
 	end)
@@ -577,18 +592,16 @@ local function triggerDynamiteExplosion(tower: Model, dynamiteModel: Model)
 			local dist = (enemy.PrimaryPart.Position - explodePos).Magnitude
 			if dist <= radius then
 				-- AoE damage
-				local hp    = enemy:GetAttribute("HP") or 0
-				local newHP = hp - aoeDamage
-				enemy:SetAttribute("HP", newHP)
-				damageIndicatorRemote:FireAllClients(enemy.PrimaryPart.Position, aoeDamage, "Critical")
+				local dealt, newHP = applyDamageToModel(enemy, aoeDamage)
+				damageIndicatorRemote:FireAllClients(enemy.PrimaryPart.Position, dealt, "Critical")
 				-- Apply / refresh burn
 				burnMap[enemy] = {
 					burnUntil = now + Deadeye.DYNAMITE_BURN_DURATION,
 					burnDPS   = burnDPS,
 					lastTick  = now,
 				}
-				if newHP <= 0 and enemy.Parent then
-					enemy:Destroy()
+				if newHP <= 0 then
+					burnMap[enemy] = nil
 				end
 			end
 		end
@@ -670,7 +683,7 @@ RunService.Heartbeat:Connect(function()
 		-- ══════════════════════════════════════════════════════
 		if towerType == "Vitalist" then
 			local protocol = tower:GetAttribute("Protocol") or "ATK"
-			local atkSpd   = tower:GetAttribute("ATK_SPD")  or 1
+			local atkSpd   = math.max(1, math.floor((tower:GetAttribute("ATK_SPD") or 1) + 0.5))
 
 			if protocol == "SUPP" then
 				-- SUPP mode: heal the nearest injured ally tower
@@ -678,7 +691,7 @@ RunService.Heartbeat:Connect(function()
 				if healTarget then
 					Vitalist.UpdateCombatState(tower, true, healTarget)
 					if Vitalist.IsReadyToFire(tower)
-						and (now - data.lastAttackTime) >= 1 / atkSpd
+						and (now - data.lastAttackTime) >= atkSpd
 					then
 						tower:SetAttribute("State", "Attacking")
 						data.lastAttackTime = now
@@ -699,7 +712,7 @@ RunService.Heartbeat:Connect(function()
 
 				Vitalist.UpdateCombatState(tower, true, target)
 				if Vitalist.IsReadyToFire(tower)
-					and (now - data.lastAttackTime) >= 1 / atkSpd
+					and (now - data.lastAttackTime) >= atkSpd
 				then
 					tower:SetAttribute("State", "Attacking")
 					data.lastAttackTime = now
@@ -730,7 +743,7 @@ RunService.Heartbeat:Connect(function()
 
 			-- Find nearest enemy using the Drone's position
 			local rng             = tower:GetAttribute("RNG")     or 60
-			local wandererAtkSpd  = tower:GetAttribute("ATK_SPD") or 0.8
+			local wandererAtkSpd  = math.max(1, math.floor((tower:GetAttribute("ATK_SPD") or 2) + 0.5))
 			local droneTarget     = findNearestEnemy(dronePos, rng)
 
 			if not droneTarget then
@@ -742,7 +755,7 @@ RunService.Heartbeat:Connect(function()
 			Wanderer.UpdateCombatState(tower, true, droneTarget)
 
 			if not Wanderer.IsReadyToFire(tower) then continue end
-			if now - data.lastAttackTime < 1 / wandererAtkSpd then continue end
+			if now - data.lastAttackTime < wandererAtkSpd then continue end
 
 			tower:SetAttribute("State", "Attacking")
 			data.lastAttackTime = now
@@ -776,10 +789,10 @@ RunService.Heartbeat:Connect(function()
 
 				if dynaTemp then
 					-- Drive toward the dynamite instead of idling
-					local atkSpd2 = tower:GetAttribute("ATK_SPD") or 1
+					local atkSpd2 = math.max(1, math.floor((tower:GetAttribute("ATK_SPD") or 1) + 0.5))
 					hhLockedTarget[tower] = dynaTemp
 					Deadeye.UpdateCombatState(tower, true, dynaTemp)
-					if Deadeye.IsReadyToFire(tower) and (now - data.lastAttackTime) >= 1 / atkSpd2 then
+					if Deadeye.IsReadyToFire(tower) and (now - data.lastAttackTime) >= atkSpd2 then
 						if Deadeye.TickHeadhunterAim(tower, dynaTemp) then
 							hhLockedTarget[tower] = nil
 							tower:SetAttribute("State", "Attacking")
@@ -812,7 +825,7 @@ RunService.Heartbeat:Connect(function()
 			end
 		end
 
-		local atkSpd = tower:GetAttribute("ATK_SPD") or 1
+		local atkSpd = math.max(1, math.floor((tower:GetAttribute("ATK_SPD") or 1) + 0.5))
 
 		-- ══════════════════════════════════════════════════════
 		-- DEADEYE combat branch
@@ -853,7 +866,7 @@ RunService.Heartbeat:Connect(function()
 				if not Deadeye.IsReadyToFire(tower) then continue end
 
 				-- Cooldown between shots still applies.
-				if now - data.lastAttackTime < 1 / atkSpd then continue end
+				if now - data.lastAttackTime < atkSpd then continue end
 
 				-- Show crosshair/laser and block until aim delay has elapsed.
 				if not Deadeye.TickHeadhunterAim(tower, locked) then
@@ -880,7 +893,7 @@ RunService.Heartbeat:Connect(function()
 				Deadeye.UpdateCombatState(tower, true, target)
 
 				if not Deadeye.IsReadyToFire(tower) then continue end
-				if now - data.lastAttackTime < 1 / atkSpd then continue end
+				if now - data.lastAttackTime < atkSpd then continue end
 
 				tower:SetAttribute("State", "Attacking")
 				data.lastAttackTime = now
@@ -891,7 +904,7 @@ RunService.Heartbeat:Connect(function()
 			-- WARRIOR combat branch
 			-- ══════════════════════════════════════════════════════
 		else
-			if now - data.lastAttackTime < 1 / atkSpd then continue end
+			if now - data.lastAttackTime < atkSpd then continue end
 
 			tower:SetAttribute("State",          "Attacking")
 			tower:SetAttribute("LastCombatTime", now)
@@ -901,14 +914,13 @@ RunService.Heartbeat:Connect(function()
 			local multi  = tower:GetAttribute("DamageMulti") or 1.0
 			local damage = atk * multi
 
-			local enemyHP = target:GetAttribute("HP") or 0
-			target:SetAttribute("HP", enemyHP - damage)
+			local dealt, newHP = applyDamageToModel(target, damage)
 			Warrior.PlayAttackAnimation(tower, target)
 
 			-- After: target:SetAttribute("HP", enemyHP - damage)
 			damageIndicatorRemote:FireAllClients(
 				target.PrimaryPart.Position,
-				damage,
+				dealt,
 				"Normal"
 			)
 
@@ -916,7 +928,6 @@ RunService.Heartbeat:Connect(function()
 				Warrior.SpawnHitParticles(target.PrimaryPart.Position, Color3.fromRGB(255, 80, 80))
 			end
 
-			if (enemyHP - damage) <= 0 then target:Destroy() end
 		end
 		
 		
@@ -996,13 +1007,10 @@ RunService.Heartbeat:Connect(function()
 			continue
 		end
 		if (now - burnData.lastTick) >= 1.0 then
-			local hp    = enemy:GetAttribute("HP") or 0
-			local newHP = hp - burnData.burnDPS
-			enemy:SetAttribute("HP", newHP)
+			local dealt, newHP = applyDamageToModel(enemy, burnData.burnDPS)
 			burnData.lastTick = now
-			damageIndicatorRemote:FireAllClients(enemy.PrimaryPart and enemy.PrimaryPart.Position or Vector3.zero, burnData.burnDPS, "Normal")
-			if newHP <= 0 and enemy.Parent then
-				enemy:Destroy()
+			damageIndicatorRemote:FireAllClients(enemy.PrimaryPart and enemy.PrimaryPart.Position or Vector3.zero, dealt, "Normal")
+			if newHP <= 0 then
 				burnMap[enemy] = nil
 			end
 		end

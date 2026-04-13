@@ -13,6 +13,8 @@
 local RunService    = game:GetService("RunService")
 local Workspace     = game:GetService("Workspace")
 local ServerStorage = game:GetService("ServerStorage")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CombatMath    = require(ReplicatedStorage:WaitForChild("CombatMath", 10))
 
 local Warrior = {}
 
@@ -348,6 +350,7 @@ function Warrior.CreateModel(position: Vector3, TowerStats: any, leapRangeMult: 
 	model:SetAttribute("RNG",               rangeStuds)
 	model:SetAttribute("HP",                template.HP)
 	model:SetAttribute("MaxHP",             template.HP)
+	model:SetAttribute("DEF",               template.DEF or 0)
 	model:SetAttribute("MOVE_SPD",          template.MOVE_SPD)
 	model:SetAttribute("DamageMulti",       template.DamageMulti)
 	model:SetAttribute("AttackType",        template.AttackType)
@@ -516,9 +519,10 @@ function Warrior.PerformLeapingSlash(
 				local angle = math.acos(math.clamp(dir:Dot(toEnemy.Unit), -1, 1))
 				if angle <= Warrior.LEAP_SLASH_CONE_ANGLE then
 					local hp = enemy:GetAttribute("HP") or 0
-					enemy:SetAttribute("HP", hp - damage)
+					local dealt = CombatMath.ApplyDefense(damage, enemy:GetAttribute("DEF") or 0)
+					enemy:SetAttribute("HP", hp - dealt)
 					Warrior.SpawnHitParticles(enemy.PrimaryPart.Position, Color3.fromRGB(255, 150, 50))
-					if (hp - damage) <= 0 then enemy:Destroy() end
+					if (hp - dealt) <= 0 then enemy:Destroy() end
 				end
 			end
 		end
