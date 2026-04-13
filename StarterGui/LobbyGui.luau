@@ -102,7 +102,7 @@ local C = {
 	TILE_BLUE   = Color3.fromRGB(210, 222, 245),
 }
 
-local PANEL_ROTATION = -1.5
+local PANEL_ROTATION = 0
 
 local CAMERA_OFFSET        = Vector3.new(6, 4, 10)
 local CAMERA_LOOKAT_OFFSET = Vector3.new(0, 2, 0)
@@ -491,6 +491,24 @@ arrowBtn.ZIndex             = 30
 arrowBtn.Parent             = screenGui
 makeCorner(arrowBtn, 10)
 makeStroke(arrowBtn, C.BORDER, 1, 0)
+
+-- "Return to Main Menu" button – shown during InRound so players can exit early
+local returnBtn              = Instance.new("TextButton")
+returnBtn.Name               = "ReturnToMainMenu"
+returnBtn.Size               = UDim2.new(0, 200, 0, 40)
+returnBtn.Position           = UDim2.new(0, 16, 0, 16)
+returnBtn.BackgroundColor3   = C.RED
+returnBtn.BorderSizePixel    = 0
+returnBtn.Text               = "⬅ Main Menu"
+returnBtn.TextColor3         = C.WHITE
+returnBtn.Font               = Enum.Font.GothamBold
+returnBtn.TextSize           = 16
+returnBtn.AutoButtonColor    = true
+returnBtn.Visible            = false
+returnBtn.ZIndex             = 30
+returnBtn.Parent             = screenGui
+makeCorner(returnBtn, 8)
+makeStroke(returnBtn, C.BORDER, 1, 0)
 
 -- ============================================================
 -- HOME GRID PANEL  (card tiles matching reference image layout)
@@ -1898,16 +1916,22 @@ local function updateToggleBtn(state: string)
 		toggleBtn.BackgroundColor3 = C.RED
 		if panelOpen then slideClose() end
 		arrowBtn.Visible = false
+		returnBtn.Visible = true
 		activePanel = nil
 		setTabActive(nil)
 	else
 		toggleBtn.Text = "▶ START"
 		toggleBtn.BackgroundColor3 = C.GREEN
 		arrowBtn.Visible = true
+		returnBtn.Visible = false
 	end
 end
 
 toggleBtn.MouseButton1Click:Connect(function()
+	toggleStateRemote:FireServer()
+end)
+
+returnBtn.MouseButton1Click:Connect(function()
 	toggleStateRemote:FireServer()
 end)
 

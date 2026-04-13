@@ -19,6 +19,8 @@ local sellTowerRemote       = ReplicatedStorage:WaitForChild("SellTower",       
 local setTargetModeRemote   = ReplicatedStorage:WaitForChild("SetTargetMode",    10)
 local loadoutConfigRemote   = ReplicatedStorage:WaitForChild("LoadoutConfigRequest", 10)
 local loadoutUpdatedRemote  = ReplicatedStorage:WaitForChild("LoadoutConfigUpdated", 10)
+local gameStateChanged      = ReplicatedStorage:WaitForChild("GameStateChanged",  10)
+local gameStateValue        = ReplicatedStorage:WaitForChild("GameState",         10)
 local CombatMath            = require(ReplicatedStorage:WaitForChild("CombatMath", 10))
 
 local towersFolder  = Workspace:WaitForChild("Towers",  15)
@@ -100,6 +102,7 @@ local hotbarGui = Instance.new("ScreenGui")
 hotbarGui.Name = "TowerLoadoutHotbar"
 hotbarGui.ResetOnSpawn = false
 hotbarGui.IgnoreGuiInset = true
+hotbarGui.Enabled = false
 hotbarGui.Parent = playerGui
 
 local hotbarContainer = Instance.new("Frame")
@@ -1600,6 +1603,18 @@ end)
 loadoutUpdatedRemote.OnClientEvent:Connect(function(snapshot: table)
 	syncLoadoutFromSnapshot(snapshot)
 end)
+
+local function updateHotbarForState(state: string)
+	hotbarGui.Enabled = (state == "InRound")
+end
+
+gameStateChanged.OnClientEvent:Connect(function(newState: string)
+	updateHotbarForState(newState)
+end)
+
+if gameStateValue then
+	updateHotbarForState(gameStateValue.Value)
+end
 
 requestLoadoutSnapshot()
 if selectedTower then
