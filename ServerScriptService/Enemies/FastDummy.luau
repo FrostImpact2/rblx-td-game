@@ -21,21 +21,6 @@ local attackTimers  = {}  -- model -> last attack timestamp
 -- CONSTANTS
 -- ============================================================
 
-local ATK_SPD_ANIM_SPEED = {
-	["VERY SLOW"] = 0.8,
-	["SLOW"]      = 1.0,
-	["MEDIUM"]    = 1.5,
-	["FAST"]      = 2.5,
-	["VERY FAST"] = 4.0,
-}
-
-local ATK_SPD_COOLDOWN = {
-	["VERY SLOW"] = 3.0,
-	["SLOW"]      = 2.0,
-	["MEDIUM"]    = 1.2,
-	["FAST"]      = 0.7,
-	["VERY FAST"] = 0.3,
-}
 
 -- ============================================================
 -- INTERNAL HELPERS
