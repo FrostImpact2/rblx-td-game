@@ -968,7 +968,6 @@ local function buildEquipSlots(slotCount)
 			UDim2.new(0, 0, 0, 0),
 			C.TEXTDIM, nil, 1)
 		slotLabel.TextScaled = true
-		slotLabel.TextWrapped = true
 		slotLabel.TextXAlignment = Enum.TextXAlignment.Center
 		slotLabel.TextYAlignment = Enum.TextYAlignment.Center
 		slotLabel.ZIndex = 10

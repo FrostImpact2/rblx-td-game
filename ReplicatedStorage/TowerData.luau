@@ -130,7 +130,7 @@ TowerData.Equipment = {
 	},
 	SpeedBoots = {
 		displayName      = "Speed Boots",
-		description      = "Legendary: +3 MOVE_SPD. On MOVE, gain temporary ATK SPD.",
+		description      = "Legendary: +3 MOVE_SPD. On MOVE, temporarily reduce attack delay.",
 		rarity           = "LEGENDARY",
 		effects          = {
 			{ stat = "MOVE_SPD", add = 3 },

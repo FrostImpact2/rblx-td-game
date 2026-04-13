@@ -436,7 +436,7 @@ end
 
 local function setLoadout(player: Player, loadoutList: { string })
 	local d = getOrCreate(player)
-	if typeof(loadoutList) ~= "table" then
+	if type(loadoutList) ~= "table" then
 		return false, "Invalid loadout payload."
 	end
 	d.loadout = copyArray(loadoutList)
