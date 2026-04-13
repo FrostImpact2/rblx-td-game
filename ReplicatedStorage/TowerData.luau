@@ -149,6 +149,28 @@ TowerData.Equipment = {
 		compatibleRoles  = nil,
 		imageId          = "",
 	},
+	AetherReactor = {
+		displayName      = "Aether Reactor",
+		description      = "Mythic: +8 ATK, -2 DEF.",
+		rarity           = "MYTHIC",
+		effects          = {
+			{ stat = "ATK", add = 8 },
+			{ stat = "DEF", add = -2 },
+		},
+		compatibleRoles  = nil,
+		imageId          = "",
+	},
+	RoleSwapMatrix = {
+		displayName      = "Role Swap Matrix",
+		description      = "Fabled: +20 RNG, -20 HP. Strategy-defining prototype.",
+		rarity           = "FABLED",
+		effects          = {
+			{ stat = "RNG", add = 20 },
+			{ stat = "HP", add = -20 },
+		},
+		compatibleRoles  = nil,
+		imageId          = "",
+	},
 }
 
 -- ============================================================

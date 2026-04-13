@@ -237,7 +237,7 @@ local function rebuildHotbar()
 		viewport.Parent = button
 
 		local cam = Instance.new("Camera")
-		cam.CFrame = CFrame.new(0, 3, 6, 0, 2, 0)
+		cam.CFrame = CFrame.lookAt(Vector3.new(0, 3, 6), Vector3.new(0, 2, 0))
 		cam.Parent = viewport
 		viewport.CurrentCamera = cam
 

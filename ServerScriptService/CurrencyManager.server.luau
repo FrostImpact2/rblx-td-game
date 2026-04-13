@@ -66,12 +66,15 @@ local STARTING_GEMS  = 50
 local LOADOUT_SIZE   = 5
 
 local DEFAULT_LOADOUT = { "Warrior", "Deadeye", "Vitalist", "Wanderer", "Pathfinder" }
+-- Starter kit so the feature is immediately testable in fresh sessions.
 local DEFAULT_EQUIPMENT_OWNED = {
 	SharpBlade = true,
 	SniperScope = true,
 	HealingPack = true,
 	SpeedBoots = true,
 	ArmorPlate = true,
+	AetherReactor = true,
+	RoleSwapMatrix = true,
 }
 
 local function copyArray(arr: { any }): { any }

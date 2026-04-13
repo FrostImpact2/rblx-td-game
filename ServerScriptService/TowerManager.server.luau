@@ -611,7 +611,9 @@ local function triggerDynamiteExplosion(tower: Model, dynamiteModel: Model)
 end
 
 local function setNumericAttribute(model: Model, attrName: string, value: number)
-	if value ~= value then value = 0 end
+	if value ~= value or value == math.huge or value == -math.huge then
+		value = 0
+	end
 	model:SetAttribute(attrName, value)
 end
 
@@ -671,7 +673,11 @@ local function applyEquipmentToTower(player: Player, towerModel: Model, towerTyp
 					setNumericAttribute(towerModel, "EqCondAtkAdd", tonumber(effect.add) or 0)
 					setNumericAttribute(towerModel, "EqCondAtkThreshold", tonumber(effect.threshold) or 0.5)
 				elseif effect.stat and effect.add then
-					applyStatDelta(towerModel, effect.stat, tonumber(effect.add) or 0)
+					local effectDelta = tonumber(effect.add) or 0
+					if effect.stat == "HP" then
+						applyStatDelta(towerModel, "MaxHP", effectDelta)
+					end
+					applyStatDelta(towerModel, effect.stat, effectDelta)
 					if effect.stat == "HP" then
 						local maxHP = tonumber(towerModel:GetAttribute("MaxHP")) or 1
 						local hp = tonumber(towerModel:GetAttribute("HP")) or maxHP
