@@ -202,6 +202,9 @@ end
 
 local function rebuildHotbar()
 	for _, slot in ipairs(hotbarSlots) do
+		if slot.preview then
+			slot.preview:Destroy()
+		end
 		slot.frame:Destroy()
 	end
 	hotbarSlots = {}
@@ -278,6 +281,7 @@ local function rebuildHotbar()
 		table.insert(hotbarSlots, {
 			frame = button,
 			stroke = stroke,
+			preview = previewModel,
 			tower = towerType,
 		})
 	end

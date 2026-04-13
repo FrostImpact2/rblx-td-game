@@ -610,9 +610,12 @@ local function triggerDynamiteExplosion(tower: Model, dynamiteModel: Model)
 	end
 end
 
+local function isInvalidNumber(value: number): boolean
+	return value ~= value or value == math.huge or value == -math.huge
+end
+
 local function setNumericAttribute(model: Model, attrName: string, value: number)
-	-- NaN check uses the Luau idiom where NaN is never equal to itself.
-	if value ~= value or value == math.huge or value == -math.huge then
+	if isInvalidNumber(value) then
 		value = 0
 	end
 	model:SetAttribute(attrName, value)

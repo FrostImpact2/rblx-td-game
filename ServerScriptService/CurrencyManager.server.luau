@@ -90,8 +90,6 @@ local DEFAULT_EQUIPMENT_OWNED = {
 	HealingPack = true,
 	SpeedBoots = true,
 	ArmorPlate = true,
-	AetherReactor = true,
-	RoleSwapMatrix = true,
 }
 
 local function copyArray(arr: { any }): { any }
