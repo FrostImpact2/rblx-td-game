@@ -405,6 +405,10 @@ local function makeFrame(parent, props)
 	return f
 end
 
+local function toInt(value: number): number
+	return math.floor(value + 0.5)
+end
+
 local function createInfoGui(towerModel: Model)
 	if infoGui then infoGui:Destroy() end
 
@@ -709,7 +713,7 @@ local function createInfoGui(towerModel: Model)
 	local statCells = {
 		{ name = "ATKStat", value = tostring(atk),               symbol = "/" },
 		{ name = "RNGStat", value = tostring(rng),               symbol = "o" },
-		{ name = "SPDStat", value = tostring(math.floor((atkSpd or 0) + 0.5)), symbol = "s" },
+		{ name = "SPDStat", value = tostring(toInt(atkSpd or 0)), symbol = "s" },
 	}
 
 	local function makeSwordIcon(parent, cx, cy, sz)
@@ -764,7 +768,7 @@ local function createInfoGui(towerModel: Model)
 		Name           = "SecondaryStatLabel",
 		Size           = UDim2.new(1, -16, 0, 16),
 		Position       = UDim2.new(0, 8, 0, 40),
-		Text           = ("DEF %d  |  MVE %d  |  ATKSPD %ds"):format(def, moveSpd, math.floor((atkSpd or 0) + 0.5)),
+		Text           = ("DEF %d  |  MVE %d  |  ATKSPD %ds"):format(def, moveSpd, toInt(atkSpd or 0)),
 		TextColor3     = Color3.fromRGB(172, 178, 194),
 		Font           = Enum.Font.GothamSemibold,
 		TextSize       = 10,
@@ -962,14 +966,14 @@ RunService.RenderStepped:Connect(function(dt)
 			end
 			local spdStat = panel:FindFirstChild("SPDStat", true)
 			if spdStat then
-				local newSpd = tostring(math.floor((selectedTowerModel:GetAttribute("ATK_SPD") or 0) + 0.5))
+				local newSpd = tostring(toInt(selectedTowerModel:GetAttribute("ATK_SPD") or 0))
 				if spdStat.Text ~= newSpd then spdStat.Text = newSpd end
 			end
 			local secondary = panel:FindFirstChild("SecondaryStatLabel", true)
 			if secondary then
 				local def = selectedTowerModel:GetAttribute("DEF") or 0
 				local mve = selectedTowerModel:GetAttribute("MOVE_SPD") or 0
-				local atkSpd = math.floor((selectedTowerModel:GetAttribute("ATK_SPD") or 0) + 0.5)
+				local atkSpd = toInt(selectedTowerModel:GetAttribute("ATK_SPD") or 0)
 				local text = ("DEF %d  |  MVE %d  |  ATKSPD %ds"):format(def, mve, atkSpd)
 				if secondary.Text ~= text then secondary.Text = text end
 			end

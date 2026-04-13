@@ -80,6 +80,7 @@ local GUN_IDLE_ANIM_ID = "rbxassetid://83963194498841"
 local DEPLOY_ANIM_ID   = "rbxassetid://113959546287676"
 local COMMAND_ANIM_ID  = "rbxassetid://84131929029062"
 local SUMMON_ANIM_ID   = "rbxassetid://134583641960643"
+local BEAM_DISPLAY_DURATION = 0.08
 
 -- ============================================================
 -- INTERNAL STATE  (per-tower tables, keyed by tower Model)
@@ -833,7 +834,7 @@ local function spawnBullet(fromPos: Vector3, toPos: Vector3, isHighCaliber: bool
 	})
 	beam.Parent = anchorA
 
-	task.delay(0.08, function()
+	task.delay(BEAM_DISPLAY_DURATION, function()
 		if anchorA and anchorA.Parent then anchorA:Destroy() end
 		if anchorB and anchorB.Parent then anchorB:Destroy() end
 	end)

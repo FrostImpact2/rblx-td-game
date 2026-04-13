@@ -79,6 +79,7 @@ local RELOAD_ANIM_ID   = "rbxassetid://134398343804499"
 local FB_ACTIVE_COLOR = Color3.fromRGB(220, 175, 50)
 local FB_GLOW_COLOR   = Color3.fromRGB(255, 210, 0)
 local FB_SPENT_COLOR  = Color3.fromRGB(75,  75,  75)
+local BEAM_DISPLAY_DURATION = 0.08
 
 -- ============================================================
 -- INTERNAL STATE
@@ -391,7 +392,7 @@ function Deadeye.SpawnBullet(fromPos: Vector3, toPos: Vector3, isEnhanced: boole
 	})
 	beam.Parent = anchorA
 
-	task.delay(0.08, function()
+	task.delay(BEAM_DISPLAY_DURATION, function()
 		if anchorA and anchorA.Parent then anchorA:Destroy() end
 		if anchorB and anchorB.Parent then anchorB:Destroy() end
 	end)

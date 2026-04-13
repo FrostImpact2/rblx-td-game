@@ -67,6 +67,7 @@ local SUMMON_ANIM_ID  = "rbxassetid://104035019425960"
 local DASH_ANIM_ID    = "rbxassetid://112527657706925"
 local WALK_ANIM_ID    = "rbxassetid://73323871613223"
 local STRIKE_ANIM_ID  = "rbxassetid://95311978328925"
+local BEAM_DISPLAY_DURATION = 0.08
 
 -- ============================================================
 -- STATE TABLES
@@ -385,7 +386,7 @@ local function spawnSpectralBolt(fromPos: Vector3, toPos: Vector3, onHit: () -> 
 	})
 	beam.Parent = anchorA
 
-	task.delay(0.08, function()
+	task.delay(BEAM_DISPLAY_DURATION, function()
 		if anchorA and anchorA.Parent then anchorA:Destroy() end
 		if anchorB and anchorB.Parent then anchorB:Destroy() end
 	end)

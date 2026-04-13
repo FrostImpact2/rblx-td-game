@@ -8,6 +8,8 @@
 ]]
 
 local TankyDummy = {}
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CombatMath = require(ReplicatedStorage:WaitForChild("CombatMath", 10))
 
 -- ============================================================
 -- ANIMATION STATE  (per-instance, keyed by model)
@@ -178,7 +180,7 @@ function BasicZombie.AttackTower(
 
 		local atk      = enemy:GetAttribute("ATK") or 1
 		local towerDef = tower:GetAttribute("DEF") or 0
-		local dealt    = math.max(1, math.floor(atk + 0.5) - math.floor(towerDef + 0.5))
+		local dealt    = CombatMath.ApplyDefense(atk, towerDef)
 		local hp       = tower:GetAttribute("HP") or 0
 		local newHP    = hp - dealt
 
@@ -196,7 +198,7 @@ function BasicZombie.AttackTower(
 	if indicatorRemote and tower and tower.PrimaryPart then
 		local atk = enemy:GetAttribute("ATK") or 1
 		local towerDef = tower:GetAttribute("DEF") or 0
-		local dealt = math.max(1, math.floor(atk + 0.5) - math.floor(towerDef + 0.5))
+		local dealt = CombatMath.ApplyDefense(atk, towerDef)
 		indicatorRemote:FireAllClients(tower.PrimaryPart.Position, dealt, "Enemy")
 	end
 
