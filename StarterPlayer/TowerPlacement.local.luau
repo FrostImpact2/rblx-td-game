@@ -412,6 +412,8 @@ local function createInfoGui(towerModel: Model)
 	local atk       = towerModel:GetAttribute("ATK")     or 0
 	local atkSpd    = towerModel:GetAttribute("ATK_SPD") or 0
 	local rng       = towerModel:GetAttribute("RNG")     or 0
+	local def       = towerModel:GetAttribute("DEF")     or 0
+	local moveSpd   = towerModel:GetAttribute("MOVE_SPD") or 0
 
 	local info = TOWER_PANEL_DATA[towerType] or TOWER_PANEL_DATA.Warrior
 
@@ -660,7 +662,7 @@ local function createInfoGui(towerModel: Model)
 	makeLabel(strikeCdBg, {
 		Name           = "StrikeCDLabel",
 		Size           = UDim2.new(1, 0, 1, 0),
-		Text           = "Strike CD",
+		Text           = "Strike CD: 0",
 		TextColor3     = Color3.fromRGB(220, 220, 220),
 		Font           = Enum.Font.Gotham,
 		TextSize        = 9,
@@ -682,7 +684,7 @@ local function createInfoGui(towerModel: Model)
 	makeLabel(moveCdBg, {
 		Name           = "MoveCDLabel",
 		Size           = UDim2.new(1, 0, 1, 0),
-		Text           = "Move CD",
+		Text           = "Move CD: 0",
 		TextColor3     = Color3.fromRGB(220, 220, 220),
 		Font           = Enum.Font.Gotham,
 		TextSize        = 9,
@@ -692,9 +694,9 @@ local function createInfoGui(towerModel: Model)
 	strikeCdFill.Name = "StrikeCDFill"
 	moveCdFill.Name   = "MoveCDFill"
 
-	local STATS_Y = PANEL_H - 46
+	local STATS_Y = PANEL_H - 58
 	local statsBar = makeFrame(panel, {
-		Size             = UDim2.new(1, 0, 0, 46),
+		Size             = UDim2.new(1, 0, 0, 58),
 		Position         = UDim2.new(0, 0, 0, STATS_Y),
 		BackgroundColor3 = Color3.fromRGB(36, 40, 50),
 	})
@@ -707,7 +709,7 @@ local function createInfoGui(towerModel: Model)
 	local statCells = {
 		{ name = "ATKStat", value = tostring(atk),               symbol = "/" },
 		{ name = "RNGStat", value = tostring(rng),               symbol = "o" },
-		{ name = "SPDStat", value = string.format("%.1f", atkSpd), symbol = "s" },
+		{ name = "SPDStat", value = tostring(math.floor((atkSpd or 0) + 0.5)), symbol = "s" },
 	}
 
 	local function makeSwordIcon(parent, cx, cy, sz)
@@ -757,6 +759,17 @@ local function createInfoGui(towerModel: Model)
 			})
 		end
 	end
+
+	makeLabel(statsBar, {
+		Name           = "SecondaryStatLabel",
+		Size           = UDim2.new(1, -16, 0, 16),
+		Position       = UDim2.new(0, 8, 0, 40),
+		Text           = ("DEF %d  |  MVE %d  |  ATKSPD %ds"):format(def, moveSpd, math.floor((atkSpd or 0) + 0.5)),
+		TextColor3     = Color3.fromRGB(172, 178, 194),
+		Font           = Enum.Font.GothamSemibold,
+		TextSize       = 10,
+		TextXAlignment = Enum.TextXAlignment.Center,
+	})
 
 	if info.strikeSkill then
 		makeFrame(panel, {
@@ -942,6 +955,24 @@ RunService.RenderStepped:Connect(function(dt)
 				local newAtk = tostring(selectedTowerModel:GetAttribute("ATK") or 0)
 				if atkStat.Text ~= newAtk then atkStat.Text = newAtk end
 			end
+			local rngStat = panel:FindFirstChild("RNGStat", true)
+			if rngStat then
+				local newRng = tostring(selectedTowerModel:GetAttribute("RNG") or 0)
+				if rngStat.Text ~= newRng then rngStat.Text = newRng end
+			end
+			local spdStat = panel:FindFirstChild("SPDStat", true)
+			if spdStat then
+				local newSpd = tostring(math.floor((selectedTowerModel:GetAttribute("ATK_SPD") or 0) + 0.5))
+				if spdStat.Text ~= newSpd then spdStat.Text = newSpd end
+			end
+			local secondary = panel:FindFirstChild("SecondaryStatLabel", true)
+			if secondary then
+				local def = selectedTowerModel:GetAttribute("DEF") or 0
+				local mve = selectedTowerModel:GetAttribute("MOVE_SPD") or 0
+				local atkSpd = math.floor((selectedTowerModel:GetAttribute("ATK_SPD") or 0) + 0.5)
+				local text = ("DEF %d  |  MVE %d  |  ATKSPD %ds"):format(def, mve, atkSpd)
+				if secondary.Text ~= text then secondary.Text = text end
+			end
 			local dmgLabel = panel:FindFirstChild("DMGLabel", true)
 			if dmgLabel then
 				local newAtk   = tostring(selectedTowerModel:GetAttribute("ATK") or 0)
@@ -957,6 +988,10 @@ RunService.RenderStepped:Connect(function(dt)
 				local remaining = math.max(0, cdEnd - tick())
 				local fraction  = cdMax > 0 and math.clamp(remaining / cdMax, 0, 1) or 0
 				strikeFill.Size = UDim2.new(fraction, 0, 1, 0)
+				local strikeLabel = panel:FindFirstChild("StrikeCDLabel", true)
+				if strikeLabel then
+					strikeLabel.Text = "Strike CD: " .. tostring(math.ceil(remaining))
+				end
 			end
 
 			-- Update Move cooldown bar
@@ -967,6 +1002,10 @@ RunService.RenderStepped:Connect(function(dt)
 				local remaining = math.max(0, cdEnd - tick())
 				local fraction  = cdMax > 0 and math.clamp(remaining / cdMax, 0, 1) or 0
 				moveFill.Size = UDim2.new(fraction, 0, 1, 0)
+				local moveLabel = panel:FindFirstChild("MoveCDLabel", true)
+				if moveLabel then
+					moveLabel.Text = "Move CD: " .. tostring(math.ceil(remaining))
+				end
 			end
 		end
 	elseif selectedTowerModel and not selectedTowerModel.Parent then

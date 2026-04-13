@@ -87,8 +87,8 @@ function BasicZombie.SetupAnimations(enemyModel: Model)
 		punchTrack.Looped   = false
 		punchTrack.Priority = Enum.AnimationPriority.Action
 
-		local atkSpdTier = enemyModel:GetAttribute("ATK_SPD") or "SLOW"
-		punchTrack:AdjustSpeed(ATK_SPD_ANIM_SPEED[atkSpdTier] or 1.0)
+		local atkDelay = math.max(1, math.floor((enemyModel:GetAttribute("ATK_SPD") or 2) + 0.5))
+		punchTrack:AdjustSpeed(math.clamp(2 / atkDelay, 0.6, 2.5))
 		punchTracks[enemyModel] = punchTrack
 	end
 
@@ -159,10 +159,9 @@ function BasicZombie.AttackTower(
 	playEnemyPunchBindable,
 	spawnHitParticlesFn: ((Vector3, Color3) -> ())?
 )
-	local now        = tick()
-	local last       = attackTimers[enemy] or 0
-	local atkSpdTier = enemy:GetAttribute("ATK_SPD") or "FAST"
-	local cooldown   = ATK_SPD_COOLDOWN[atkSpdTier] or 1.2
+	local now      = tick()
+	local last     = attackTimers[enemy] or 0
+	local cooldown = math.max(1, math.floor((enemy:GetAttribute("ATK_SPD") or 2) + 0.5))
 
 	if now - last < cooldown then return end
 	attackTimers[enemy] = now
@@ -192,9 +191,11 @@ function BasicZombie.AttackTower(
 	task.delay(0.15, function()
 		if not enemy or not enemy.Parent or not tower or not tower.Parent then return end
 
-		local atk   = enemy:GetAttribute("ATK") or 1
-		local hp    = tower:GetAttribute("HP") or 0
-		local newHP = hp - atk
+		local atk      = enemy:GetAttribute("ATK") or 1
+		local towerDef = tower:GetAttribute("DEF") or 0
+		local dealt    = math.max(1, math.floor(atk + 0.5) - math.floor(towerDef + 0.5))
+		local hp       = tower:GetAttribute("HP") or 0
+		local newHP    = hp - dealt
 
 		tower:SetAttribute("HP", newHP)
 		tower:SetAttribute("LastCombatTime", tick())
@@ -208,7 +209,10 @@ function BasicZombie.AttackTower(
 
 	local indicatorRemote = game:GetService("ReplicatedStorage"):FindFirstChild("ShowDamageIndicator")
 	if indicatorRemote and tower and tower.PrimaryPart then
-		indicatorRemote:FireAllClients(tower.PrimaryPart.Position, atk, "Enemy")
+		local atk = enemy:GetAttribute("ATK") or 1
+		local towerDef = tower:GetAttribute("DEF") or 0
+		local dealt = math.max(1, math.floor(atk + 0.5) - math.floor(towerDef + 0.5))
+		indicatorRemote:FireAllClients(tower.PrimaryPart.Position, dealt, "Enemy")
 	end
 
 

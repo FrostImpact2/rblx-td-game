@@ -44,6 +44,7 @@ local Workspace         = game:GetService("Workspace")
 local ServerStorage     = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService      = game:GetService("TweenService")
+local CombatMath        = require(ReplicatedStorage:WaitForChild("CombatMath", 10))
 
 local Wanderer = {}
 
@@ -783,64 +784,58 @@ end
 
 -- Bullet tracer from origin to target
 local function spawnBullet(fromPos: Vector3, toPos: Vector3, isHighCaliber: boolean?)
-	local dir  = toPos - fromPos
-	local dist = dir.Magnitude
+	local dist = (toPos - fromPos).Magnitude
 	if dist < 0.1 then return end
-	dir = dir.Unit
 
-	local size = isHighCaliber
-		and Vector3.new(0.13, 0.13, 0.8)
-		or  Vector3.new(0.09, 0.09, 0.5)
+	local beamColor = isHighCaliber and Color3.fromRGB(255, 200, 60) or Color3.fromRGB(240, 230, 180)
 
-	local bullet     = Instance.new("Part")
-	bullet.Name      = "WandererBullet"
-	bullet.Size      = size
-	bullet.Color     = isHighCaliber
-		and Color3.fromRGB(255, 200, 60)
-		or  Color3.fromRGB(240, 230, 180)
-	bullet.Material  = Enum.Material.Neon
-	bullet.Anchored  = true
-	bullet.CanCollide = false
-	bullet.CastShadow = false
-	bullet.CFrame    = CFrame.new(fromPos, toPos)
-	bullet.Parent    = Workspace
+	local anchorA = Instance.new("Part")
+	anchorA.Anchored = true
+	anchorA.CanCollide = false
+	anchorA.CanQuery = false
+	anchorA.CanTouch = false
+	anchorA.Transparency = 1
+	anchorA.Size = Vector3.new(0.05, 0.05, 0.05)
+	anchorA.CFrame = CFrame.new(fromPos)
+	anchorA.Parent = Workspace
+
+	local anchorB = Instance.new("Part")
+	anchorB.Anchored = true
+	anchorB.CanCollide = false
+	anchorB.CanQuery = false
+	anchorB.CanTouch = false
+	anchorB.Transparency = 1
+	anchorB.Size = Vector3.new(0.05, 0.05, 0.05)
+	anchorB.CFrame = CFrame.new(toPos)
+	anchorB.Parent = Workspace
 
 	local attA = Instance.new("Attachment")
-	attA.Position = Vector3.new(0, 0, size.Z / 2)
-	attA.Parent   = bullet
-
+	attA.Parent = anchorA
 	local attB = Instance.new("Attachment")
-	attB.Position = Vector3.new(0, 0, -(size.Z / 2))
-	attB.Parent   = bullet
+	attB.Parent = anchorB
 
-	local trail = Instance.new("Trail")
-	trail.Attachment0 = attA
-	trail.Attachment1 = attB
-	trail.Lifetime    = isHighCaliber and 0.12 or 0.06
-	trail.MinLength   = 0
-	trail.FaceCamera  = true
-	trail.Color       = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, isHighCaliber and Color3.fromRGB(255, 215, 80) or Color3.fromRGB(255, 240, 180)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(80, 80, 80)),
+	local beam = Instance.new("Beam")
+	beam.Attachment0 = attA
+	beam.Attachment1 = attB
+	beam.FaceCamera = true
+	beam.LightEmission = 1
+	beam.LightInfluence = 0
+	beam.Segments = 1
+	beam.Width0 = isHighCaliber and 0.2 or 0.12
+	beam.Width1 = isHighCaliber and 0.08 or 0.05
+	beam.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, beamColor),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 130, 50)),
 	})
-	trail.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0),
-		NumberSequenceKeypoint.new(1, 1),
+	beam.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.05),
+		NumberSequenceKeypoint.new(1, 0.85),
 	})
-	trail.Parent = bullet
+	beam.Parent = anchorA
 
-	local SPEED = Wanderer.BULLET_SPEED
-	local travelTime = dist / SPEED
-	local elapsed    = 0
-	local conn
-	conn = RunService.Heartbeat:Connect(function(dt)
-		elapsed += dt
-		if elapsed >= travelTime or not bullet.Parent then
-			conn:Disconnect()
-			if bullet.Parent then bullet:Destroy() end
-			return
-		end
-		bullet.CFrame = CFrame.new(fromPos + dir * (elapsed * SPEED), toPos)
+	task.delay(0.08, function()
+		if anchorA and anchorA.Parent then anchorA:Destroy() end
+		if anchorB and anchorB.Parent then anchorB:Destroy() end
 	end)
 end
 
@@ -886,6 +881,7 @@ function Wanderer.CreateModel(position: Vector3, TowerStats: any): Model?
 	model:SetAttribute("RNG",         rangeStuds)
 	model:SetAttribute("HP",          template.HP)
 	model:SetAttribute("MaxHP",       template.HP)
+	model:SetAttribute("DEF",         template.DEF or 0)
 	model:SetAttribute("MOVE_SPD",    template.MOVE_SPD)
 	model:SetAttribute("DamageMulti", template.DamageMulti or 1.0)
 	model:SetAttribute("AttackType",  template.AttackType  or "Ranged")
@@ -1236,10 +1232,11 @@ function Wanderer.TickSuppressingFire(
 				local d = dVec.Magnitude
 				if d <= radius then
 					local hp = enemy:GetAttribute("HP") or 0
-					local newHP = hp - dps
+					local dealt = CombatMath.ApplyDefense(dps, enemy:GetAttribute("DEF") or 0)
+					local newHP = hp - dealt
 					enemy:SetAttribute("HP", newHP)
 					if damageIndicatorRemote then
-						damageIndicatorRemote:FireAllClients(enemy.PrimaryPart.Position, dps, "Normal")
+						damageIndicatorRemote:FireAllClients(enemy.PrimaryPart.Position, dealt, "Normal")
 					end
 					if newHP <= 0 and enemy.Parent then
 						enemy:Destroy()
@@ -1421,7 +1418,8 @@ function Wanderer.DoAttack(tower: Model, target: Model, _enemiesFolder: Folder?)
 
 	if isRecon then
 		-- ── High Caliber (1.5× ATK) ──
-		local damage = atk * multi * Wanderer.HIGH_CALIBER_MULTI
+		local rawDamage = atk * multi * Wanderer.HIGH_CALIBER_MULTI
+		local damage = CombatMath.ApplyDefense(rawDamage, target:GetAttribute("DEF") or 0)
 		local hp     = target:GetAttribute("HP") or 0
 		local newHP  = hp - damage
 		target:SetAttribute("HP", newHP)
@@ -1441,7 +1439,8 @@ function Wanderer.DoAttack(tower: Model, target: Model, _enemiesFolder: Folder?)
 
 	else
 		-- ── Heavy Rounds: 2 shots × 0.5× ATK ──
-		local damage = atk * multi * Wanderer.HEAVY_ROUNDS_MULTI
+		local rawDamage = atk * multi * Wanderer.HEAVY_ROUNDS_MULTI
+		local damage = CombatMath.ApplyDefense(rawDamage, target:GetAttribute("DEF") or 0)
 
 		-- Shot 1
 		local hp1    = target:GetAttribute("HP") or 0
@@ -1465,11 +1464,12 @@ function Wanderer.DoAttack(tower: Model, target: Model, _enemiesFolder: Folder?)
 				if not target or not target.Parent or not target.PrimaryPart then return end
 
 				local hp2    = target:GetAttribute("HP") or 0
-				local newHP2 = hp2 - damage
+				local damage2 = CombatMath.ApplyDefense(rawDamage, target:GetAttribute("DEF") or 0)
+				local newHP2 = hp2 - damage2
 				target:SetAttribute("HP", newHP2)
 
 				local dr = ReplicatedStorage:FindFirstChild("ShowDamageIndicator")
-				if dr then dr:FireAllClients(target.PrimaryPart.Position, damage, "Normal") end
+				if dr then dr:FireAllClients(target.PrimaryPart.Position, damage2, "Normal") end
 
 				faceDroneToward(tower, target.PrimaryPart.Position)
 				Wanderer.SpawnHitParticles(target.PrimaryPart.Position, Color3.fromRGB(180, 210, 255))

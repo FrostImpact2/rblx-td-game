@@ -46,6 +46,7 @@ local TweenService      = game:GetService("TweenService")
 local Workspace         = game:GetService("Workspace")
 local ServerStorage     = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CombatMath        = require(ReplicatedStorage:WaitForChild("CombatMath", 10))
 
 local Deadeye = {}
 
@@ -341,81 +342,58 @@ end
 -- ============================================================
 
 function Deadeye.SpawnBullet(fromPos: Vector3, toPos: Vector3, isEnhanced: boolean?)
-	local dir  = toPos - fromPos
-	local dist = dir.Magnitude
+	local dist = (toPos - fromPos).Magnitude
 	if dist < 0.1 then return end
-	dir = dir.Unit
 
-	-- Enhanced bullet is larger and brighter
-	local bulletSize = isEnhanced
-		and Vector3.new(0.14, 0.14, 0.75)
-		or  Vector3.new(0.1,  0.1,  0.55)
+	local beamColor = isEnhanced and Color3.fromRGB(255, 210, 60) or Color3.fromRGB(255, 245, 200)
 
-	local bullet = Instance.new("Part")
-	bullet.Name       = "DeadeyeBullet"
-	bullet.Size       = bulletSize
-	bullet.Color      = isEnhanced
-		and Color3.fromRGB(255, 210, 60)
-		or  Color3.fromRGB(255, 245, 200)
-	bullet.Material   = Enum.Material.Neon
-	bullet.Anchored   = true
-	bullet.CanCollide = false
-	bullet.CastShadow = false
-	bullet.CFrame     = CFrame.new(fromPos, toPos)
-	bullet.Parent     = Workspace
+	local anchorA = Instance.new("Part")
+	anchorA.Anchored = true
+	anchorA.CanCollide = false
+	anchorA.CanQuery = false
+	anchorA.CanTouch = false
+	anchorA.Transparency = 1
+	anchorA.Size = Vector3.new(0.05, 0.05, 0.05)
+	anchorA.CFrame = CFrame.new(fromPos)
+	anchorA.Parent = Workspace
 
-	if isEnhanced then
-		local light = Instance.new("PointLight")
-		light.Brightness = 4
-		light.Color      = Color3.fromRGB(255, 200, 60)
-		light.Range      = 10
-		light.Parent     = bullet
-	end
+	local anchorB = Instance.new("Part")
+	anchorB.Anchored = true
+	anchorB.CanCollide = false
+	anchorB.CanQuery = false
+	anchorB.CanTouch = false
+	anchorB.Transparency = 1
+	anchorB.Size = Vector3.new(0.05, 0.05, 0.05)
+	anchorB.CFrame = CFrame.new(toPos)
+	anchorB.Parent = Workspace
 
-	local attFront = Instance.new("Attachment")
-	attFront.Position = Vector3.new(0, 0, bulletSize.Z / 2)
-	attFront.Parent   = bullet
+	local attA = Instance.new("Attachment")
+	attA.Parent = anchorA
+	local attB = Instance.new("Attachment")
+	attB.Parent = anchorB
 
-	local attBack = Instance.new("Attachment")
-	attBack.Position = Vector3.new(0, 0, -(bulletSize.Z / 2))
-	attBack.Parent   = bullet
-
-	local trail = Instance.new("Trail")
-	trail.Attachment0 = attFront
-	trail.Attachment1 = attBack
-	trail.Lifetime    = isEnhanced and 0.12 or 0.07
-	trail.MinLength   = 0
-	trail.FaceCamera  = true
-	trail.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0,
-			isEnhanced and Color3.fromRGB(255, 225, 80) or Color3.fromRGB(255, 255, 220)),
-		ColorSequenceKeypoint.new(0.45,
-			isEnhanced and Color3.fromRGB(255, 140, 20) or Color3.fromRGB(180, 200, 255)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(80, 80, 80)),
+	local beam = Instance.new("Beam")
+	beam.Attachment0 = attA
+	beam.Attachment1 = attB
+	beam.FaceCamera = true
+	beam.LightEmission = 1
+	beam.LightInfluence = 0
+	beam.Segments = 1
+	beam.Width0 = isEnhanced and 0.22 or 0.12
+	beam.Width1 = isEnhanced and 0.08 or 0.05
+	beam.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, beamColor),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 120, 40)),
 	})
-	trail.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0,   0.0),
-		NumberSequenceKeypoint.new(0.6, 0.4),
-		NumberSequenceKeypoint.new(1,   1.0),
+	beam.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.05),
+		NumberSequenceKeypoint.new(1, 0.85),
 	})
-	trail.WidthScale = NumberSequence.new({
-		NumberSequenceKeypoint.new(0,   isEnhanced and 1.4 or 1),
-		NumberSequenceKeypoint.new(0.5, isEnhanced and 0.7 or 0.5),
-		NumberSequenceKeypoint.new(1,   0),
-	})
-	trail.Parent = bullet
+	beam.Parent = anchorA
 
-	local travelTime = dist / Deadeye.BULLET_SPEED
-	local tween = TweenService:Create(
-		bullet,
-		TweenInfo.new(travelTime, Enum.EasingStyle.Linear),
-		{ CFrame = CFrame.new(toPos, toPos + dir) }
-	)
-	tween:Play()
-	tween.Completed:Connect(function()
-		task.delay(0.14, function()
-			if bullet and bullet.Parent then bullet:Destroy() end
-		end)
+	task.delay(0.08, function()
+		if anchorA and anchorA.Parent then anchorA:Destroy() end
+		if anchorB and anchorB.Parent then anchorB:Destroy() end
 	end)
 end
 
@@ -851,6 +829,7 @@ function Deadeye.CreateModel(position: Vector3, TowerStats: any): Model?
 	model:SetAttribute("RNG",              rangeStuds)
 	model:SetAttribute("HP",               template.HP)
 	model:SetAttribute("MaxHP",            template.HP)
+	model:SetAttribute("DEF",              template.DEF or 0)
 	model:SetAttribute("MOVE_SPD",         template.MOVE_SPD)
 	model:SetAttribute("DamageMulti",      template.DamageMulti or 1.0)
 	model:SetAttribute("AttackType",       template.AttackType  or "Ranged")
@@ -1326,7 +1305,8 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 	if isEnhanced then
 		-- Headhunter – bullet 3
 		tower:SetAttribute("BasicAttackCount", 0)
-		local damage = ap * multi
+		local rawDamage = ap * multi
+		local damage = CombatMath.ApplyDefense(rawDamage, actualTarget:GetAttribute("DEF") or 0)
 		local hp     = actualTarget:GetAttribute("HP")    or 0
 		local maxHP  = actualTarget:GetAttribute("MaxHP") or hp
 		local newHP  = hp - damage
@@ -1387,7 +1367,8 @@ function Deadeye.DoAttack(tower: Model, target: Model, enemiesFolder: Folder?): 
 		-- Revolver – bullet 1 or 2
 		local newCount = count + 1
 		tower:SetAttribute("BasicAttackCount", newCount)
-		local damage = atk * multi
+		local rawDamage = atk * multi
+		local damage = CombatMath.ApplyDefense(rawDamage, actualTarget:GetAttribute("DEF") or 0)
 		local hp     = actualTarget:GetAttribute("HP") or 0
 		local newHP  = hp - damage
 		actualTarget:SetAttribute("HP", newHP)
