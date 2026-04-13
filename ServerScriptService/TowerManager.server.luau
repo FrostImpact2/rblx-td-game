@@ -611,6 +611,7 @@ local function triggerDynamiteExplosion(tower: Model, dynamiteModel: Model)
 end
 
 local function setNumericAttribute(model: Model, attrName: string, value: number)
+	-- NaN check uses the Luau idiom where NaN is never equal to itself.
 	if value ~= value or value == math.huge or value == -math.huge then
 		value = 0
 	end

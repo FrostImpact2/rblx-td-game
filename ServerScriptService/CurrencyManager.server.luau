@@ -65,7 +65,24 @@ local STARTING_COINS = 1000
 local STARTING_GEMS  = 50
 local LOADOUT_SIZE   = 5
 
-local DEFAULT_LOADOUT = { "Warrior", "Deadeye", "Vitalist", "Wanderer", "Pathfinder" }
+local function buildDefaultLoadout(): { string }
+	local preferred = { "Warrior", "Deadeye", "Vitalist", "Wanderer", "Pathfinder" }
+	local out = {}
+	for _, towerName in ipairs(preferred) do
+		if TowerData.Towers[towerName] then
+			table.insert(out, towerName)
+		end
+	end
+	if #out == 0 then
+		for towerName in pairs(TowerData.Towers) do
+			table.insert(out, towerName)
+		end
+		table.sort(out)
+	end
+	return out
+end
+
+local DEFAULT_LOADOUT = buildDefaultLoadout()
 -- Starter kit so the feature is immediately testable in fresh sessions.
 local DEFAULT_EQUIPMENT_OWNED = {
 	SharpBlade = true,

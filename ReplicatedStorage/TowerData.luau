@@ -19,6 +19,7 @@ TowerData.Rarity = {
 	RARE      = { name = "Rare",      color = Color3.fromRGB(80,  120, 220), stars = 3 },
 	EPIC      = { name = "Epic",      color = Color3.fromRGB(160, 60,  220), stars = 4 },
 	LEGENDARY = { name = "Legendary", color = Color3.fromRGB(255, 165, 0),   stars = 5 },
+	-- MYTHIC/FABLED are currently used for equipment rarity tiers.
 	MYTHIC    = { name = "Mythic",    color = Color3.fromRGB(255, 70, 160),  stars = 6 },
 	FABLED    = { name = "Fabled",    color = Color3.fromRGB(120, 255, 255), stars = 7 },
 }
