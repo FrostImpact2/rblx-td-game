@@ -611,6 +611,7 @@ local function triggerDynamiteExplosion(tower: Model, dynamiteModel: Model)
 end
 
 local function isInvalidNumber(value: number): boolean
+	-- NaN is the only number value that is not equal to itself.
 	return value ~= value or value == math.huge or value == -math.huge
 end
 

@@ -207,7 +207,10 @@ end
 local function rarityStars(rarityKey: string): string
 	local r = TowerData.Rarity[rarityKey]
 	local n = r and r.stars or 1
-	return string.rep("★", n) .. string.rep("☆", 5 - n)
+	if n <= 5 then
+		return string.rep("★", n) .. string.rep("☆", 5 - n)
+	end
+	return string.rep("★", n)
 end
 
 local refreshLoadoutViews = function() end
@@ -964,7 +967,6 @@ local function buildEquipSlots(slotCount)
 			UDim2.new(1, 0, 1, 0),
 			UDim2.new(0, 0, 0, 0),
 			C.TEXTDIM, nil, 1)
-		slotLabel.TextSize = 12
 		slotLabel.TextScaled = true
 		slotLabel.TextWrapped = true
 		slotLabel.TextXAlignment = Enum.TextXAlignment.Center
@@ -995,6 +997,14 @@ local function rebuildEquipmentChoices()
 
 	local yCount = 0
 	local assigned = equippedByTower[selectedTower] or {}
+	local equippedElsewhereSet = {}
+	for towerName, eqList in pairs(equippedByTower) do
+		if towerName ~= selectedTower then
+			for _, eqKey in ipairs(eqList) do
+				equippedElsewhereSet[eqKey] = true
+			end
+		end
+	end
 	local equipmentKeys = {}
 	for eqKey in pairs(ownedEquipment) do
 		table.insert(equipmentKeys, eqKey)
@@ -1005,13 +1015,7 @@ local function rebuildEquipmentChoices()
 		if isEquipmentCompatible(selectedTower, eqKey) then
 			local eqData = TowerData.Equipment[eqKey]
 			local isEquippedHere = table.find(assigned, eqKey) ~= nil
-			local equippedElsewhere = false
-			for towerName, eqList in pairs(equippedByTower) do
-				if towerName ~= selectedTower and table.find(eqList, eqKey) then
-					equippedElsewhere = true
-					break
-				end
-			end
+			local equippedElsewhere = equippedElsewhereSet[eqKey] == true
 
 			local btn = makeButton(equipListFrame, "", UDim2.new(1, -2, 0, 34), UDim2.new(0, 0, 0, 0), C.G1, C.TEXT)
 			btn.LayoutOrder = yCount
