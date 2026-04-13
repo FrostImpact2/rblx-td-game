@@ -17,8 +17,10 @@ local RunService        = game:GetService("RunService")
 local Workspace         = game:GetService("Workspace")
 
 local TowerStats        = require(ReplicatedStorage:WaitForChild("TowerStats", 10))
+local TowerData         = require(ReplicatedStorage:WaitForChild("TowerData", 10))
 local CombatMath        = require(ReplicatedStorage:WaitForChild("CombatMath", 10))
 local PathfindingModule = require(ReplicatedStorage:WaitForChild("PathfindingModule", 10))
+local CurrencyManager   = require(script.Parent:WaitForChild("CurrencyManager.server", 10))
 
 if not TowerStats then error("[TowerManager] Could not find TowerStats!") end
 
@@ -608,6 +610,103 @@ local function triggerDynamiteExplosion(tower: Model, dynamiteModel: Model)
 	end
 end
 
+local function isInvalidNumber(value: number): boolean
+	-- Reject NaN and infinities before writing replicated numeric attributes.
+	return value ~= value or value == math.huge or value == -math.huge
+end
+
+local function setNumericAttribute(model: Model, attrName: string, value: number)
+	if isInvalidNumber(value) then
+		value = 0
+	end
+	model:SetAttribute(attrName, value)
+end
+
+local function applyStatDelta(model: Model, statName: string, delta: number)
+	local current = tonumber(model:GetAttribute(statName)) or 0
+	local nextVal = current + delta
+	if statName == "ATK_SPD" then
+		nextVal = math.max(0.2, nextVal)
+	elseif statName == "HP" then
+		nextVal = math.max(1, nextVal)
+	elseif statName == "MaxHP" then
+		nextVal = math.max(1, nextVal)
+	else
+		nextVal = math.max(0, nextVal)
+	end
+	setNumericAttribute(model, statName, nextVal)
+end
+
+local function refreshEquipmentDerivedStats(tower: Model)
+	local baseAtk = tonumber(tower:GetAttribute("BaseATK")) or tonumber(tower:GetAttribute("ATK")) or 0
+	local baseAtkSpd = tonumber(tower:GetAttribute("BaseATK_SPD")) or tonumber(tower:GetAttribute("ATK_SPD")) or 1
+
+	local condAtkAdd = tonumber(tower:GetAttribute("EqCondAtkAdd")) or 0
+	local condAtkThreshold = tonumber(tower:GetAttribute("EqCondAtkThreshold")) or 0
+	local hp = tonumber(tower:GetAttribute("HP")) or 0
+	local maxHP = tonumber(tower:GetAttribute("MaxHP")) or 1
+	local hpRatio = maxHP > 0 and (hp / maxHP) or 0
+	local atk = baseAtk + ((hpRatio >= condAtkThreshold) and condAtkAdd or 0)
+
+	local moveAtkSpdDelta = tonumber(tower:GetAttribute("EqMoveAtkSpdDelta")) or 0
+	local moveBuffUntil = tonumber(tower:GetAttribute("EqMoveBuffUntil")) or 0
+	local atkSpd = baseAtkSpd + ((tick() <= moveBuffUntil) and moveAtkSpdDelta or 0)
+
+	setNumericAttribute(tower, "ATK", math.max(0, atk))
+	setNumericAttribute(tower, "ATK_SPD", math.max(0.2, atkSpd))
+end
+
+local function applyEquipmentToTower(player: Player, towerModel: Model, towerType: string)
+	local equippedKeys = CurrencyManager.GetEquippedForTower(player, towerType)
+	local appliedNames = {}
+
+	setNumericAttribute(towerModel, "EqCondAtkAdd", 0)
+	setNumericAttribute(towerModel, "EqCondAtkThreshold", 0)
+	setNumericAttribute(towerModel, "EqMoveAtkSpdDelta", 0)
+	setNumericAttribute(towerModel, "EqMoveBuffDuration", 0)
+	setNumericAttribute(towerModel, "EqMoveBuffUntil", 0)
+
+	for _, eqKey in ipairs(equippedKeys) do
+		local eqData = TowerData.Equipment[eqKey]
+		if eqData then
+			table.insert(appliedNames, eqKey)
+			for _, effect in ipairs(eqData.effects or {}) do
+				if effect.trigger == "OnMove" and effect.stat == "ATK_SPD" then
+					setNumericAttribute(towerModel, "EqMoveAtkSpdDelta", tonumber(effect.add) or 0)
+					setNumericAttribute(towerModel, "EqMoveBuffDuration", tonumber(effect.duration) or 0)
+				elseif effect.condition == "AboveHpPercent" and effect.stat == "ATK" then
+					setNumericAttribute(towerModel, "EqCondAtkAdd", tonumber(effect.add) or 0)
+					setNumericAttribute(towerModel, "EqCondAtkThreshold", tonumber(effect.threshold) or 0.5)
+				elseif effect.stat and effect.add then
+					local effectDelta = tonumber(effect.add) or 0
+					if effect.stat == "HP" then
+						applyStatDelta(towerModel, "MaxHP", effectDelta)
+					end
+					applyStatDelta(towerModel, effect.stat, effectDelta)
+					if effect.stat == "HP" then
+						local maxHP = tonumber(towerModel:GetAttribute("MaxHP")) or 1
+						local hp = tonumber(towerModel:GetAttribute("HP")) or maxHP
+						setNumericAttribute(towerModel, "HP", math.min(hp, maxHP))
+					end
+				end
+			end
+		end
+	end
+
+	setNumericAttribute(towerModel, "BaseATK", tonumber(towerModel:GetAttribute("ATK")) or 0)
+	setNumericAttribute(towerModel, "BaseATK_SPD", tonumber(towerModel:GetAttribute("ATK_SPD")) or 1)
+	towerModel:SetAttribute("EquipmentKeys", table.concat(appliedNames, ","))
+	refreshEquipmentDerivedStats(towerModel)
+end
+
+local function triggerMoveEquipmentBuff(towerModel: Model)
+	local delta = tonumber(towerModel:GetAttribute("EqMoveAtkSpdDelta")) or 0
+	local duration = tonumber(towerModel:GetAttribute("EqMoveBuffDuration")) or 0
+	if delta == 0 or duration <= 0 then return end
+	setNumericAttribute(towerModel, "EqMoveBuffUntil", tick() + duration)
+	refreshEquipmentDerivedStats(towerModel)
+end
+
 -- ============================================================
 -- TOWER AI LOOP + SURVIVOR PASSIVE
 -- ============================================================
@@ -644,6 +743,7 @@ RunService.Heartbeat:Connect(function()
 
 		local state     = tower:GetAttribute("State")     or "Idle"
 		local towerType = tower:GetAttribute("TowerType") or "Warrior"
+		refreshEquipmentDerivedStats(tower)
 
 		-- ── Warrior: Survivor passive ──
 		if towerType == "Warrior" then
@@ -1048,6 +1148,15 @@ placeRemote.OnServerEvent:Connect(function(player: Player, templateName: string,
 	if type(templateName) ~= "string"  then return end
 	if not TowerStats.Templates[templateName] then return end
 
+	local profile = CurrencyManager.GetData(player)
+	if not profile.unlocked[templateName] then
+		return
+	end
+	local isInLoadout = table.find(profile.loadout or {}, templateName) ~= nil
+	if not isInLoadout then
+		return
+	end
+
 	local towerModel
 	if templateName == "Deadeye" then
 		towerModel = Deadeye.CreateModel(position, TowerStats)
@@ -1064,6 +1173,7 @@ placeRemote.OnServerEvent:Connect(function(player: Player, templateName: string,
 	if towerModel then
 		towerModel.Parent = towersFolder
 		towerModel:SetAttribute("Owner", player.Name)
+		applyEquipmentToTower(player, towerModel, templateName)
 		registerTower(towerModel)
 		onTowerPlaced(towerModel)
 	end
@@ -1077,6 +1187,7 @@ moveRemote.OnServerEvent:Connect(function(player: Player, tower: Model, dest: Ve
 	if (tower:GetAttribute("State") or "Idle") == "Leaping" then return end
 
 	local towerType = tower:GetAttribute("TowerType")
+	triggerMoveEquipmentBuff(tower)
 	if towerType == "Wanderer" then
 		-- For Wanderer: move the Drone, not the tower itself
 		Wanderer.MoveDrone(tower, dest)
