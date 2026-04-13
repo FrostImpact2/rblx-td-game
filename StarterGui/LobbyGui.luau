@@ -32,6 +32,8 @@ local gachaResultRemote    = ReplicatedStorage:WaitForChild("GachaResult",      
 local toggleStateRemote    = ReplicatedStorage:WaitForChild("ToggleGameState",   30)
 local gameStateChanged     = ReplicatedStorage:WaitForChild("GameStateChanged",  30)
 local gameStateValue       = ReplicatedStorage:WaitForChild("GameState",         30)
+local loadoutConfigRemote  = ReplicatedStorage:WaitForChild("LoadoutConfigRequest", 30)
+local loadoutUpdatedRemote = ReplicatedStorage:WaitForChild("LoadoutConfigUpdated", 30)
 
 -- ============================================================
 -- LOCAL STATE
@@ -43,6 +45,8 @@ local activeBanner    = "standard"
 local activePanel     = nil
 local unlockedTowers  = { Warrior = true }
 local ownedEquipment  = {}
+local currentLoadout  = { "Warrior" }
+local equippedByTower = {}
 local selectedTower   = nil
 local activeQuestTab  = "Daily"
 local panelOpen       = false
@@ -204,6 +208,52 @@ local function rarityStars(rarityKey: string): string
 	local r = TowerData.Rarity[rarityKey]
 	local n = r and r.stars or 1
 	return string.rep("★", n) .. string.rep("☆", 5 - n)
+end
+
+local refreshLoadoutViews = function() end
+
+local function applyProfileSnapshot(snapshot: table?)
+	if type(snapshot) ~= "table" then return end
+
+	if type(snapshot.unlocked) == "table" then
+		unlockedTowers = table.clone(snapshot.unlocked)
+	end
+	if type(snapshot.equipment) == "table" then
+		ownedEquipment = table.clone(snapshot.equipment)
+	end
+	if type(snapshot.loadout) == "table" and #snapshot.loadout > 0 then
+		currentLoadout = {}
+		for _, towerName in ipairs(snapshot.loadout) do
+			if type(towerName) == "string" then
+				table.insert(currentLoadout, towerName)
+			end
+		end
+	end
+	if #currentLoadout == 0 then
+		currentLoadout = { "Warrior" }
+	end
+	if type(snapshot.equipped) == "table" then
+		equippedByTower = {}
+		for towerName, list in pairs(snapshot.equipped) do
+			if type(list) == "table" then
+				equippedByTower[towerName] = table.clone(list)
+			end
+		end
+	end
+	refreshLoadoutViews()
+end
+
+local function requestProfile(action: string, payload: table?): table?
+	local ok, response = pcall(function()
+		return loadoutConfigRemote:InvokeServer(action, payload or {})
+	end)
+	if not ok or type(response) ~= "table" then
+		return nil
+	end
+	if response.data then
+		applyProfileSnapshot(response.data)
+	end
+	return response
 end
 
 -- ============================================================
@@ -584,6 +634,41 @@ local challengeTile, challengeTileBtn = makeTile(homePanel,
 	"Earn special equipment",
 	C.ACCENT2, 7)
 
+local loadoutHomeFrame = Instance.new("Frame")
+loadoutHomeFrame.Name = "LoadoutPanel"
+loadoutHomeFrame.Size = UDim2.new(1, -(GRID_PAD * 2), 0, 110)
+loadoutHomeFrame.Position = UDim2.new(0, GRID_PAD, 1, -122)
+loadoutHomeFrame.BackgroundColor3 = C.G2
+loadoutHomeFrame.BorderSizePixel = 0
+loadoutHomeFrame.ZIndex = 12
+loadoutHomeFrame.Parent = homePanel
+makeCorner(loadoutHomeFrame, 10)
+makeStroke(loadoutHomeFrame, C.BORDER, 1, 0)
+
+local loadoutHomeTitle = makeLabel(loadoutHomeFrame, "MATCH LOADOUT (Click slot to clear)",
+	UDim2.new(1, -12, 0, 24),
+	UDim2.new(0, 10, 0, 6),
+	C.TEXTSUB, nil, 1)
+loadoutHomeTitle.TextSize = 13
+loadoutHomeTitle.ZIndex = 13
+
+local loadoutHomeRow = Instance.new("Frame")
+loadoutHomeRow.Size = UDim2.new(1, -16, 0, 68)
+loadoutHomeRow.Position = UDim2.new(0, 8, 0, 32)
+loadoutHomeRow.BackgroundTransparency = 1
+loadoutHomeRow.BorderSizePixel = 0
+loadoutHomeRow.ZIndex = 13
+loadoutHomeRow.Parent = loadoutHomeFrame
+
+local loadoutHomeLayout = Instance.new("UIListLayout")
+loadoutHomeLayout.FillDirection = Enum.FillDirection.Horizontal
+loadoutHomeLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+loadoutHomeLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+loadoutHomeLayout.Padding = UDim.new(0, 8)
+loadoutHomeLayout.Parent = loadoutHomeRow
+
+local loadoutHomeSlots = {}
+
 -- ============================================================
 -- INVENTORY PANEL
 -- ============================================================
@@ -778,6 +863,14 @@ local equipHeader = makeLabel(towerViewer, "EQUIPMENT SLOTS",
 equipHeader.TextSize = 14
 equipHeader.ZIndex = 8
 
+local loadoutActionBtn = makeButton(towerViewer, "ADD TO LOADOUT",
+	UDim2.new(0, 190, 0, 28),
+	UDim2.new(1, -200, 0, 366),
+	C.ACCENT2, C.WHITE)
+loadoutActionBtn.TextSize = 12
+loadoutActionBtn.ZIndex = 9
+makeCorner(loadoutActionBtn, 6)
+
 local equipRow              = Instance.new("Frame")
 equipRow.Name               = "EquipRow"
 equipRow.Size               = UDim2.new(1, -20, 0, 62)
@@ -787,37 +880,161 @@ equipRow.BorderSizePixel    = 0
 equipRow.ZIndex             = 8
 equipRow.Parent             = towerViewer
 
-local equipSlotLabels = {}
+local equipSlotButtons = {}
+
+local equipListFrame = Instance.new("ScrollingFrame")
+equipListFrame.Name = "EquipmentChoices"
+equipListFrame.Size = UDim2.new(1, -20, 0, 136)
+equipListFrame.Position = UDim2.new(0, 10, 0, 462)
+equipListFrame.BackgroundColor3 = C.G2
+equipListFrame.BorderSizePixel = 0
+equipListFrame.ScrollBarThickness = 4
+equipListFrame.ScrollBarImageColor3 = C.ACCENT
+equipListFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+equipListFrame.ZIndex = 8
+equipListFrame.Parent = towerViewer
+makeCorner(equipListFrame, 8)
+makeStroke(equipListFrame, C.BORDER, 1, 0)
+
+local equipListLayout = Instance.new("UIListLayout")
+equipListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+equipListLayout.Padding = UDim.new(0, 5)
+equipListLayout.Parent = equipListFrame
+
+local equipListPadding = Instance.new("UIPadding")
+equipListPadding.PaddingTop = UDim.new(0, 6)
+equipListPadding.PaddingLeft = UDim.new(0, 6)
+equipListPadding.PaddingRight = UDim.new(0, 6)
+equipListPadding.PaddingBottom = UDim.new(0, 6)
+equipListPadding.Parent = equipListFrame
+
+local function isEquipmentCompatible(towerName: string, eqKey: string): boolean
+	local td = TowerData.Towers[towerName]
+	local eq = TowerData.Equipment[eqKey]
+	if not td or not eq then return false end
+	local compat = eq.compatibleRoles
+	if not compat or #compat == 0 then return true end
+	for _, role in ipairs(compat) do
+		if role == td.role then
+			return true
+		end
+	end
+	return false
+end
+
+local function refreshEquipSlotsForSelectedTower()
+	local towerName = selectedTower
+	if not towerName then return end
+	local assigned = equippedByTower[towerName] or {}
+	for i, slot in ipairs(equipSlotButtons) do
+		local eqKey = assigned[i]
+		local text = "+"
+		local color = C.TEXTDIM
+		if eqKey then
+			local eq = TowerData.Equipment[eqKey]
+			text = eq and eq.displayName or eqKey
+			color = rarityColor(eq and eq.rarity or "COMMON")
+		end
+		slot.label.Text = text
+		slot.label.TextColor3 = color
+	end
+end
 
 local function buildEquipSlots(slotCount)
-	for _, s in ipairs(equipSlotLabels) do
-		s:Destroy()
+	for _, s in ipairs(equipSlotButtons) do
+		s.button:Destroy()
 	end
-	equipSlotLabels = {}
+	equipSlotButtons = {}
 
 	local slotW = 54
 	local gap   = 8
 	for i = 1, slotCount do
-		local slot              = Instance.new("Frame")
-		slot.Size               = UDim2.new(0, slotW, 0, 54)
-		slot.Position           = UDim2.new(0, (i-1) * (slotW + gap), 0, 0)
-		slot.BackgroundColor3   = C.GRAY
-		slot.BorderSizePixel    = 0
-		slot.ZIndex             = 9
-		slot.Parent             = equipRow
-		makeCorner(slot, 8)
-		makeStroke(slot, C.BORDER, 1, 0)
+		local slotButton = Instance.new("TextButton")
+		slotButton.Size = UDim2.new(0, slotW, 0, 54)
+		slotButton.Position = UDim2.new(0, (i - 1) * (slotW + gap), 0, 0)
+		slotButton.BackgroundColor3 = C.GRAY
+		slotButton.BorderSizePixel = 0
+		slotButton.Text = ""
+		slotButton.ZIndex = 9
+		slotButton.Parent = equipRow
+		makeCorner(slotButton, 8)
+		makeStroke(slotButton, C.BORDER, 1, 0)
 
-		local slotLabel = makeLabel(slot, "+",
+		local slotLabel = makeLabel(slotButton, "+",
 			UDim2.new(1, 0, 1, 0),
 			UDim2.new(0, 0, 0, 0),
 			C.TEXTDIM, nil, 1)
-		slotLabel.TextSize = 26
+		slotLabel.TextSize = 12
+		slotLabel.TextWrapped = true
 		slotLabel.TextXAlignment = Enum.TextXAlignment.Center
 		slotLabel.TextYAlignment = Enum.TextYAlignment.Center
 		slotLabel.ZIndex = 10
-		table.insert(equipSlotLabels, slot)
+
+		slotButton.MouseButton1Click:Connect(function()
+			if not selectedTower then return end
+			local assigned = equippedByTower[selectedTower] or {}
+			if assigned[i] then
+				requestProfile("ToggleEquipment", { tower = selectedTower, equipment = assigned[i] })
+			end
+		end)
+
+		table.insert(equipSlotButtons, { button = slotButton, label = slotLabel })
 	end
+	refreshEquipSlotsForSelectedTower()
+end
+
+local function rebuildEquipmentChoices()
+	for _, child in ipairs(equipListFrame:GetChildren()) do
+		if child:IsA("TextButton") then child:Destroy() end
+	end
+	if not selectedTower then
+		equipListFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+		return
+	end
+
+	local yCount = 0
+	local assigned = equippedByTower[selectedTower] or {}
+	local equipmentKeys = {}
+	for eqKey in pairs(ownedEquipment) do
+		table.insert(equipmentKeys, eqKey)
+	end
+	table.sort(equipmentKeys)
+
+	for _, eqKey in ipairs(equipmentKeys) do
+		if isEquipmentCompatible(selectedTower, eqKey) then
+			local eqData = TowerData.Equipment[eqKey]
+			local isEquippedHere = table.find(assigned, eqKey) ~= nil
+			local equippedElsewhere = false
+			for towerName, eqList in pairs(equippedByTower) do
+				if towerName ~= selectedTower and table.find(eqList, eqKey) then
+					equippedElsewhere = true
+					break
+				end
+			end
+
+			local btn = makeButton(equipListFrame, "", UDim2.new(1, -2, 0, 34), UDim2.new(0, 0, 0, 0), C.G1, C.TEXT)
+			btn.LayoutOrder = yCount
+			btn.ZIndex = 9
+			btn.TextSize = 13
+			btn.TextXAlignment = Enum.TextXAlignment.Left
+			local stateText = isEquippedHere and "EQUIPPED"
+				or (equippedElsewhere and "USED")
+				or "EQUIP"
+			btn.Text = string.format("[%s] %s  (%s)", stateText, eqData.displayName, eqData.rarity)
+			btn.TextColor3 = isEquippedHere and C.GREEN or rarityColor(eqData.rarity)
+			btn.AutoButtonColor = not equippedElsewhere or isEquippedHere
+			btn.BackgroundColor3 = isEquippedHere and C.G2 or C.G1
+			makeStroke(btn, C.BORDER, 1, 0)
+
+			btn.MouseButton1Click:Connect(function()
+				if equippedElsewhere and not isEquippedHere then return end
+				requestProfile("ToggleEquipment", { tower = selectedTower, equipment = eqKey })
+			end)
+			yCount += 1
+		end
+	end
+
+	equipListFrame.CanvasSize = UDim2.new(0, 0, 0, math.max(0, yCount * 39 + 8))
 end
 
 buildEquipSlots(0)
@@ -833,6 +1050,7 @@ local function updateViewerForTower(towerName: string)
 	local td         = TowerData.Towers[towerName]
 	local ts         = TowerStats and TowerStats.Templates[towerName]
 	local isUnlocked = unlockedTowers[towerName] == true
+	local inLoadout  = table.find(currentLoadout, towerName) ~= nil
 
 	viewerName.Text  = td and td.displayName or towerName
 	viewerName.TextColor3 = isUnlocked and C.TEXT or C.TEXTDIM
@@ -861,6 +1079,12 @@ local function updateViewerForTower(towerName: string)
 		statSpd.Text = "–"
 		statHP.Text  = "–"
 	end
+
+	loadoutActionBtn.Visible = isUnlocked
+	loadoutActionBtn.Text = inLoadout and "REMOVE FROM LOADOUT" or "ADD TO LOADOUT"
+	loadoutActionBtn.BackgroundColor3 = inLoadout and C.RED or C.ACCENT2
+	refreshEquipSlotsForSelectedTower()
+	rebuildEquipmentChoices()
 end
 
 local function buildTowerListEntries()
@@ -946,6 +1170,62 @@ local function buildTowerListEntries()
 
 	towerScrollFrame.CanvasSize = UDim2.new(0, 0, 0, totalH)
 end
+
+local function rebuildHomeLoadoutSlots()
+	for _, slot in ipairs(loadoutHomeSlots) do
+		slot:Destroy()
+	end
+	loadoutHomeSlots = {}
+
+	for i = 1, 5 do
+		local towerName = currentLoadout[i]
+		local slot = makeButton(loadoutHomeRow, "",
+			UDim2.new(0, 92, 0, 66),
+			UDim2.new(0, 0, 0, 0),
+			towerName and C.G1 or C.G3, C.TEXT)
+		slot.TextSize = 12
+		slot.TextWrapped = true
+		slot.Text = towerName and (string.format("%d. %s", i, towerName)) or (string.format("%d. Empty", i))
+		slot.ZIndex = 14
+		makeCorner(slot, 7)
+		makeStroke(slot, C.BORDER, 1, 0)
+
+		slot.MouseButton1Click:Connect(function()
+			if not towerName then return end
+			local nextLoadout = table.clone(currentLoadout)
+			table.remove(nextLoadout, i)
+			requestProfile("SetLoadout", { loadout = nextLoadout })
+		end)
+
+		table.insert(loadoutHomeSlots, slot)
+	end
+end
+
+refreshLoadoutViews = function()
+	buildTowerListEntries()
+	rebuildHomeLoadoutSlots()
+	if selectedTower and TowerData.Towers[selectedTower] then
+		updateViewerForTower(selectedTower)
+	elseif currentLoadout[1] then
+		updateViewerForTower(currentLoadout[1])
+	end
+end
+
+loadoutActionBtn.MouseButton1Click:Connect(function()
+	if not selectedTower then return end
+	if not unlockedTowers[selectedTower] then return end
+
+	local inLoadout = table.find(currentLoadout, selectedTower) ~= nil
+	local nextLoadout = table.clone(currentLoadout)
+	if inLoadout then
+		local idx = table.find(nextLoadout, selectedTower)
+		if idx then table.remove(nextLoadout, idx) end
+	else
+		if #nextLoadout >= 5 then return end
+		table.insert(nextLoadout, selectedTower)
+	end
+	requestProfile("SetLoadout", { loadout = nextLoadout })
+end)
 
 -- ============================================================
 -- QUESTS PANEL
@@ -1437,11 +1717,8 @@ coin10Btn.MouseButton1Click:Connect(function() firePull(10, false) end)
 gachaResultRemote.OnClientEvent:Connect(function(results: table)
 	for _, res in ipairs(results) do
 		addResultCard(res.tower, res.rarity, res.isNew)
-		if res.isNew then
-			unlockedTowers[res.tower] = true
-			buildTowerListEntries()
-		end
 	end
+	requestProfile("Get", {})
 end)
 
 -- ============================================================
@@ -1603,6 +1880,10 @@ updateCurrencyRemote.OnClientEvent:Connect(function(data: table)
 	gemsLabel.Text  = formatNumber(localGems)
 end)
 
+loadoutUpdatedRemote.OnClientEvent:Connect(function(snapshot: table)
+	applyProfileSnapshot(snapshot)
+end)
+
 -- ============================================================
 -- GAME STATE TOGGLE
 -- ============================================================
@@ -1641,3 +1922,4 @@ end
 buildTowerListEntries()
 switchQuestTab("Daily")
 switchBanner("standard")
+requestProfile("Get", {})

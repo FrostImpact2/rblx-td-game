@@ -17,6 +17,8 @@ local moveRemote            = ReplicatedStorage:WaitForChild("MoveTower",       
 local strikeSkillRemote     = ReplicatedStorage:WaitForChild("StrikeSkill",      10)
 local sellTowerRemote       = ReplicatedStorage:WaitForChild("SellTower",        10)
 local setTargetModeRemote   = ReplicatedStorage:WaitForChild("SetTargetMode",    10)
+local loadoutConfigRemote   = ReplicatedStorage:WaitForChild("LoadoutConfigRequest", 10)
+local loadoutUpdatedRemote  = ReplicatedStorage:WaitForChild("LoadoutConfigUpdated", 10)
 local CombatMath            = require(ReplicatedStorage:WaitForChild("CombatMath", 10))
 
 local towersFolder  = Workspace:WaitForChild("Towers",  15)
@@ -26,6 +28,8 @@ local placing             = false
 local selectedTower       = "Warrior"
 local selectedTowerModel: Model? = nil
 local canPlace            = false
+local loadoutTowers       = { "Warrior" }
+local selectedLoadoutSlot = 1
 
 -- Strike Skill aiming state (Dynamite)
 local strikeAiming       = false
@@ -57,11 +61,6 @@ local updateConnection: RBXScriptConnection? = nil
 local towerHpGuis        = {}
 local towerBarAttachments = {}
 
-local PLACE_KEY_DEADEYE    = Enum.KeyCode.T
-local PLACE_KEY_WARRIOR    = Enum.KeyCode.U
-local PLACE_KEY_VITALIST   = Enum.KeyCode.Y
-local PLACE_KEY_WANDERER   = Enum.KeyCode.P
-local PLACE_KEY_PATHFINDER = Enum.KeyCode.K
 local STRIKE_SKILL_KEY     = Enum.KeyCode.Q
 local GHOST_TRANSPARENCY = 0.5
 local VALID_COLOR        = Color3.fromRGB(100, 255, 100)
@@ -78,6 +77,240 @@ local TOWER_RANGE_STUDS = {
 	Wanderer   = 60,
 	Pathfinder = 20,
 }
+
+local startPlacing
+
+local HOTBAR_KEYS = {
+	Enum.KeyCode.One,
+	Enum.KeyCode.Two,
+	Enum.KeyCode.Three,
+	Enum.KeyCode.Four,
+	Enum.KeyCode.Five,
+}
+
+local HOTBAR_COLORS = {
+	Warrior = Color3.fromRGB(255, 120, 120),
+	Deadeye = Color3.fromRGB(130, 170, 255),
+	Vitalist = Color3.fromRGB(120, 255, 180),
+	Wanderer = Color3.fromRGB(255, 210, 110),
+	Pathfinder = Color3.fromRGB(180, 140, 255),
+}
+
+local hotbarGui = Instance.new("ScreenGui")
+hotbarGui.Name = "TowerLoadoutHotbar"
+hotbarGui.ResetOnSpawn = false
+hotbarGui.IgnoreGuiInset = true
+hotbarGui.Parent = playerGui
+
+local hotbarContainer = Instance.new("Frame")
+hotbarContainer.Name = "HotbarContainer"
+hotbarContainer.Size = UDim2.new(0, 560, 0, 100)
+hotbarContainer.Position = UDim2.new(0.5, -280, 1, -125)
+hotbarContainer.BackgroundColor3 = Color3.fromRGB(35, 37, 50)
+hotbarContainer.BackgroundTransparency = 0.15
+hotbarContainer.BorderSizePixel = 0
+hotbarContainer.Parent = hotbarGui
+
+local hotbarCorner = Instance.new("UICorner")
+hotbarCorner.CornerRadius = UDim.new(0, 10)
+hotbarCorner.Parent = hotbarContainer
+
+local hotbarStroke = Instance.new("UIStroke")
+hotbarStroke.Color = Color3.fromRGB(255, 90, 120)
+hotbarStroke.Thickness = 1
+hotbarStroke.Transparency = 0.25
+hotbarStroke.Parent = hotbarContainer
+
+local hotbarLayout = Instance.new("UIListLayout")
+hotbarLayout.FillDirection = Enum.FillDirection.Horizontal
+hotbarLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+hotbarLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+hotbarLayout.Padding = UDim.new(0, 10)
+hotbarLayout.Parent = hotbarContainer
+
+local hotbarPadding = Instance.new("UIPadding")
+hotbarPadding.PaddingLeft = UDim.new(0, 10)
+hotbarPadding.PaddingRight = UDim.new(0, 10)
+hotbarPadding.PaddingTop = UDim.new(0, 8)
+hotbarPadding.PaddingBottom = UDim.new(0, 8)
+hotbarPadding.Parent = hotbarContainer
+
+local hotbarSlots = {}
+
+local function buildPreviewModel(towerType: string): Model
+	local model = Instance.new("Model")
+	model.Name = towerType .. "Preview"
+	local color = HOTBAR_COLORS[towerType] or Color3.fromRGB(200, 200, 200)
+
+	local torso = Instance.new("Part")
+	torso.Name = "Torso"
+	torso.Size = Vector3.new(2, 2.6, 1.4)
+	torso.Color = color
+	torso.Anchored = true
+	torso.CanCollide = false
+	torso.Material = Enum.Material.SmoothPlastic
+	torso.Position = Vector3.new(0, 1.8, 0)
+	torso.Parent = model
+
+	local head = Instance.new("Part")
+	head.Name = "Head"
+	head.Shape = Enum.PartType.Ball
+	head.Size = Vector3.new(1.25, 1.25, 1.25)
+	head.Color = Color3.new(1, 1, 1)
+	head.Anchored = true
+	head.CanCollide = false
+	head.Material = Enum.Material.SmoothPlastic
+	head.Position = Vector3.new(0, 3.45, 0)
+	head.Parent = model
+
+	local left = Instance.new("Part")
+	left.Name = "Left"
+	left.Size = Vector3.new(0.7, 2.0, 0.7)
+	left.Color = color:Lerp(Color3.new(0, 0, 0), 0.2)
+	left.Anchored = true
+	left.CanCollide = false
+	left.Material = Enum.Material.SmoothPlastic
+	left.Position = Vector3.new(-0.9, 1.7, 0)
+	left.Parent = model
+
+	local right = left:Clone()
+	right.Name = "Right"
+	right.Position = Vector3.new(0.9, 1.7, 0)
+	right.Parent = model
+
+	local root = Instance.new("Part")
+	root.Name = "Root"
+	root.Size = Vector3.new(0.2, 0.2, 0.2)
+	root.Transparency = 1
+	root.Anchored = true
+	root.CanCollide = false
+	root.Position = Vector3.new(0, 1.8, 0)
+	root.Parent = model
+	model.PrimaryPart = root
+
+	return model
+end
+
+local function updateHotbarSelectionVisuals()
+	for i, slot in ipairs(hotbarSlots) do
+		local isSelected = (i == selectedLoadoutSlot and loadoutTowers[i] == selectedTower)
+		slot.stroke.Color = isSelected and Color3.fromRGB(255, 220, 120) or Color3.fromRGB(180, 185, 210)
+		slot.stroke.Thickness = isSelected and 2 or 1
+		slot.frame.BackgroundColor3 = isSelected and Color3.fromRGB(62, 66, 90) or Color3.fromRGB(46, 50, 70)
+	end
+end
+
+local function rebuildHotbar()
+	for _, slot in ipairs(hotbarSlots) do
+		slot.frame:Destroy()
+	end
+	hotbarSlots = {}
+
+	local slotCount = math.max(#loadoutTowers, 1)
+	hotbarContainer.Size = UDim2.new(0, 20 + (slotCount * 94), 0, 100)
+	hotbarContainer.Position = UDim2.new(0.5, -(20 + (slotCount * 94)) / 2, 1, -125)
+
+	for i, towerType in ipairs(loadoutTowers) do
+		local button = Instance.new("TextButton")
+		button.Name = "Slot" .. i
+		button.Size = UDim2.new(0, 84, 1, 0)
+		button.BackgroundColor3 = Color3.fromRGB(46, 50, 70)
+		button.BorderSizePixel = 0
+		button.Text = ""
+		button.AutoButtonColor = false
+		button.Parent = hotbarContainer
+
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 8)
+		corner.Parent = button
+
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = Color3.fromRGB(180, 185, 210)
+		stroke.Thickness = 1
+		stroke.Parent = button
+
+		local viewport = Instance.new("ViewportFrame")
+		viewport.Size = UDim2.new(1, -8, 1, -28)
+		viewport.Position = UDim2.new(0, 4, 0, 4)
+		viewport.BackgroundTransparency = 1
+		viewport.BorderSizePixel = 0
+		viewport.Parent = button
+
+		local cam = Instance.new("Camera")
+		cam.CFrame = CFrame.new(0, 3, 6, 0, 2, 0)
+		cam.Parent = viewport
+		viewport.CurrentCamera = cam
+
+		local previewModel = buildPreviewModel(towerType)
+		previewModel.Parent = viewport
+
+		local keyLabel = Instance.new("TextLabel")
+		keyLabel.Size = UDim2.new(0, 18, 0, 18)
+		keyLabel.Position = UDim2.new(0, 3, 1, -21)
+		keyLabel.BackgroundColor3 = Color3.fromRGB(25, 27, 37)
+		keyLabel.BorderSizePixel = 0
+		keyLabel.Text = tostring(i)
+		keyLabel.TextColor3 = Color3.fromRGB(240, 240, 250)
+		keyLabel.TextScaled = true
+		keyLabel.Font = Enum.Font.GothamBold
+		keyLabel.Parent = button
+		local keyCorner = Instance.new("UICorner")
+		keyCorner.CornerRadius = UDim.new(0, 5)
+		keyCorner.Parent = keyLabel
+
+		local towerLabel = Instance.new("TextLabel")
+		towerLabel.Size = UDim2.new(1, -24, 0, 18)
+		towerLabel.Position = UDim2.new(0, 22, 1, -21)
+		towerLabel.BackgroundTransparency = 1
+		towerLabel.TextXAlignment = Enum.TextXAlignment.Left
+		towerLabel.Text = towerType
+		towerLabel.TextColor3 = Color3.fromRGB(230, 235, 250)
+		towerLabel.TextScaled = true
+		towerLabel.Font = Enum.Font.GothamBold
+		towerLabel.Parent = button
+
+		button.MouseButton1Click:Connect(function()
+			selectedLoadoutSlot = i
+			startPlacing(towerType)
+			updateHotbarSelectionVisuals()
+		end)
+
+		table.insert(hotbarSlots, {
+			frame = button,
+			stroke = stroke,
+			tower = towerType,
+		})
+	end
+
+	updateHotbarSelectionVisuals()
+end
+
+local function syncLoadoutFromSnapshot(snapshot: table?)
+	if type(snapshot) ~= "table" then return end
+	if type(snapshot.loadout) == "table" and #snapshot.loadout > 0 then
+		loadoutTowers = {}
+		for _, towerType in ipairs(snapshot.loadout) do
+			if type(towerType) == "string" then
+				table.insert(loadoutTowers, towerType)
+			end
+		end
+	end
+	if #loadoutTowers == 0 then
+		loadoutTowers = { "Warrior" }
+	end
+	selectedLoadoutSlot = math.clamp(selectedLoadoutSlot, 1, #loadoutTowers)
+	selectedTower = loadoutTowers[selectedLoadoutSlot] or loadoutTowers[1]
+	rebuildHotbar()
+end
+
+local function requestLoadoutSnapshot()
+	local ok, response = pcall(function()
+		return loadoutConfigRemote:InvokeServer("Get", {})
+	end)
+	if ok and type(response) == "table" and response.data then
+		syncLoadoutFromSnapshot(response.data)
+	end
+end
 
 -- ============================================================
 -- MOUSE POSITION
@@ -276,12 +509,15 @@ local function stopPlacing()
 	if updateConnection then updateConnection:Disconnect(); updateConnection = nil end
 end
 
-local function startPlacing(towerType: string)
+startPlacing = function(towerType: string)
 	if strikeAiming then
 		-- will be cleaned up below via stopStrikeAiming (declared later but fine here)
 	end
 	if placing and selectedTower == towerType then stopPlacing(); return end
 	selectedTower = towerType
+	local idx = table.find(loadoutTowers, towerType)
+	if idx then selectedLoadoutSlot = idx end
+	updateHotbarSelectionVisuals()
 	placing = true; deselectTower(); createGhost()
 	if updateConnection then updateConnection:Disconnect(); updateConnection = nil end
 	updateConnection = RunService.RenderStepped:Connect(function()
@@ -1265,17 +1501,11 @@ end
 UserInputService.InputBegan:Connect(function(input, processed)
 	if processed then return end
 
-	if input.KeyCode == PLACE_KEY_DEADEYE then
-		startPlacing("Deadeye")
-	elseif input.KeyCode == PLACE_KEY_VITALIST then
-		startPlacing("Vitalist")
-	elseif input.KeyCode == PLACE_KEY_WARRIOR then
-		startPlacing("Warrior")
-	elseif input.KeyCode == PLACE_KEY_WANDERER then
-		startPlacing("Wanderer")
-	elseif input.KeyCode == PLACE_KEY_PATHFINDER then
-		startPlacing("Pathfinder")
-
+	local keySlot = table.find(HOTBAR_KEYS, input.KeyCode)
+	if keySlot and loadoutTowers[keySlot] then
+		selectedLoadoutSlot = keySlot
+		startPlacing(loadoutTowers[keySlot])
+		updateHotbarSelectionVisuals()
 	elseif input.KeyCode == STRIKE_SKILL_KEY then
 		if strikeAiming     then stopStrikeAiming();     return end
 		if vitalistAiming   then stopVitalistAiming();    return end
@@ -1362,5 +1592,14 @@ mouse.Button2Down:Connect(function()
 		end
 	end
 end)
+
+loadoutUpdatedRemote.OnClientEvent:Connect(function(snapshot: table)
+	syncLoadoutFromSnapshot(snapshot)
+end)
+
+requestLoadoutSnapshot()
+if selectedTower then
+	updateHotbarSelectionVisuals()
+end
 
 print("[TowerPlacement] Ready!")

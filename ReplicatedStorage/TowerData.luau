@@ -19,6 +19,8 @@ TowerData.Rarity = {
 	RARE      = { name = "Rare",      color = Color3.fromRGB(80,  120, 220), stars = 3 },
 	EPIC      = { name = "Epic",      color = Color3.fromRGB(160, 60,  220), stars = 4 },
 	LEGENDARY = { name = "Legendary", color = Color3.fromRGB(255, 165, 0),   stars = 5 },
+	MYTHIC    = { name = "Mythic",    color = Color3.fromRGB(255, 70, 160),  stars = 6 },
+	FABLED    = { name = "Fabled",    color = Color3.fromRGB(120, 255, 255), stars = 7 },
 }
 
 -- ============================================================
@@ -94,46 +96,56 @@ TowerData.Towers = {
 TowerData.Equipment = {
 	SharpBlade = {
 		displayName      = "Sharp Blade",
-		description      = "Increases ATK by 5.",
-		rarity           = "COMMON",
-		stat             = "ATK",
-		bonus            = 5,
+		description      = "Rare: -15 HP, +5 ATK.",
+		rarity           = "RARE",
+		effects          = {
+			{ stat = "HP", add = -15 },
+			{ stat = "ATK", add = 5 },
+		},
 		compatibleRoles  = { "Melee DPS" },
 		imageId          = "",
 	},
 	SniperScope = {
 		displayName      = "Sniper Scope",
-		description      = "Increases RNG by 8.",
-		rarity           = "UNCOMMON",
-		stat             = "RNG",
-		bonus            = 8,
+		description      = "Rare: +8 RNG, -1 DEF.",
+		rarity           = "RARE",
+		effects          = {
+			{ stat = "RNG", add = 8 },
+			{ stat = "DEF", add = -1 },
+		},
 		compatibleRoles  = { "Ranged DPS" },
 		imageId          = "",
 	},
 	HealingPack = {
 		displayName      = "Healing Pack",
-		description      = "Increases AP by 6.",
-		rarity           = "UNCOMMON",
-		stat             = "AP",
-		bonus            = 6,
+		description      = "Epic: +6 AP. If above 50% HP, gain +5 ATK.",
+		rarity           = "EPIC",
+		effects          = {
+			{ stat = "AP", add = 6 },
+			{ condition = "AboveHpPercent", threshold = 0.5, stat = "ATK", add = 5 },
+		},
 		compatibleRoles  = { "Support / Hybrid" },
 		imageId          = "",
 	},
 	SpeedBoots = {
 		displayName      = "Speed Boots",
-		description      = "Increases MOVE_SPD by 3.",
-		rarity           = "COMMON",
-		stat             = "MOVE_SPD",
-		bonus            = 3,
+		description      = "Legendary: +3 MOVE_SPD. On MOVE, gain temporary ATK SPD.",
+		rarity           = "LEGENDARY",
+		effects          = {
+			{ stat = "MOVE_SPD", add = 3 },
+			{ trigger = "OnMove", stat = "ATK_SPD", add = -1, duration = 6 },
+		},
 		compatibleRoles  = nil,    -- universal; equippable on any tower
 		imageId          = "",
 	},
 	ArmorPlate = {
 		displayName      = "Armor Plate",
-		description      = "Increases HP by 25.",
-		rarity           = "COMMON",
-		stat             = "HP",
-		bonus            = 25,
+		description      = "Rare: +25 HP, -2 MOVE_SPD.",
+		rarity           = "RARE",
+		effects          = {
+			{ stat = "HP", add = 25 },
+			{ stat = "MOVE_SPD", add = -2 },
+		},
 		compatibleRoles  = nil,
 		imageId          = "",
 	},
