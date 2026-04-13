@@ -928,7 +928,6 @@ RunService.Heartbeat:Connect(function()
 				Warrior.SpawnHitParticles(target.PrimaryPart.Position, Color3.fromRGB(255, 80, 80))
 			end
 
-			if newHP <= 0 and target.Parent then target:Destroy() end
 		end
 		
 		

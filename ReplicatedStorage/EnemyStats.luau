@@ -9,6 +9,14 @@ local DEFAULT_MOVE_SPD = 7
 local DEFAULT_ATK_SPD = 2
 local DEFAULT_RNG = 5
 
+local function resolveIntStat(value: any, fallback: number): number
+	local num = tonumber(value)
+	if num == nil then
+		return fallback
+	end
+	return math.max(1, math.floor(num + 0.5))
+end
+
 EnemyStats.Templates = {
 ["BasicZombie"] = {
 ATK       = 5,
@@ -42,27 +50,15 @@ TARGETING = "CLOSEST",
 }
 
 function EnemyStats.ResolveMoveSpd(value: any): number
-	local num = tonumber(value)
-	if num == nil then
-		return DEFAULT_MOVE_SPD
-	end
-return math.max(1, math.floor(num + 0.5))
+	return resolveIntStat(value, DEFAULT_MOVE_SPD)
 end
 
 function EnemyStats.ResolveAtkSpd(value: any): number
-	local num = tonumber(value)
-	if num == nil then
-		return DEFAULT_ATK_SPD
-	end
-return math.max(1, math.floor(num + 0.5))
+	return resolveIntStat(value, DEFAULT_ATK_SPD)
 end
 
 function EnemyStats.ResolveRng(value: any): number
-	local num = tonumber(value)
-	if num == nil then
-		return DEFAULT_RNG
-	end
-return math.max(1, math.floor(num + 0.5))
+	return resolveIntStat(value, DEFAULT_RNG)
 end
 
 function EnemyStats.ApplyModifier(baseValue: number, flat: number?, percent: number?): number

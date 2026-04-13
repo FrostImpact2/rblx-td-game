@@ -765,7 +765,7 @@ local function createInfoGui(towerModel: Model)
 		Name           = "SecondaryStatLabel",
 		Size           = UDim2.new(1, -16, 0, 16),
 		Position       = UDim2.new(0, 8, 0, 40),
-		Text           = ("DEF %d  |  MVE %d  |  ATKSPD %ds"):format(def, moveSpd, atkSpd),
+		Text           = ("DEF %d  |  MVE %d  |  ATK_SPD %ds"):format(def, moveSpd, atkSpd),
 		TextColor3     = Color3.fromRGB(172, 178, 194),
 		Font           = Enum.Font.GothamSemibold,
 		TextSize       = 10,
@@ -971,7 +971,7 @@ RunService.RenderStepped:Connect(function(dt)
 				local def = selectedTowerModel:GetAttribute("DEF") or 0
 				local mve = selectedTowerModel:GetAttribute("MOVE_SPD") or 0
 				local atkSpd = CombatMath.ResolveIntegerStat(selectedTowerModel:GetAttribute("ATK_SPD"), 0, 0)
-				local text = ("DEF %d  |  MVE %d  |  ATKSPD %ds"):format(def, mve, atkSpd)
+				local text = ("DEF %d  |  MVE %d  |  ATK_SPD %ds"):format(def, mve, atkSpd)
 				if secondary.Text ~= text then secondary.Text = text end
 			end
 			local dmgLabel = panel:FindFirstChild("DMGLabel", true)
